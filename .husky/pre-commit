@@ -1,5 +1,5 @@
-# 运行 lint-staged 检查暂存的文件
-npx lint-staged
+# 运行 lint-staged 检查暂存的文件（--quiet 屏蔽"没有匹配到暂存文件"之类的提示，不影响真实报错输出）
+npx lint-staged --quiet
 
 # 运行 Rust 格式化检查
 cd src-tauri && cargo fmt --check && cd ..
