@@ -1,4 +1,4 @@
-﻿use crate::modules::error::AppError;
+use crate::modules::error::AppError;
 use crate::modules::resource_manager::ResourceManager;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -14,6 +14,7 @@ use crate::modules::privileged_helper::{self, HelperEvent, HelperSession};
 
 /// 检查是否以管理员权限运行（仅 Windows）
 #[cfg(windows)]
+#[allow(dead_code)]
 fn is_elevated() -> bool {
     use windows::Win32::Foundation::HANDLE;
     use windows::Win32::Security::{
@@ -527,6 +528,7 @@ impl NetworkService {
     /// # 返回
     /// * `Ok(String)` - 成功启动，返回虚拟 IP 地址
     /// * `Err(AppError)` - 启动失败
+    #[allow(clippy::too_many_arguments)]
     pub async fn start_easytier_with_config(
         &self,
         network_name: String,
@@ -850,7 +852,7 @@ impl NetworkService {
             rpc_port
         );
 
-        let launch_args = cmd_args.clone();
+        let _launch_args = cmd_args.clone();
 
         // Windows 生产模式：使用 privileged helper
         #[cfg(all(windows, not(debug_assertions)))]
@@ -859,7 +861,7 @@ impl NetworkService {
                 easytier_path.clone(),
                 working_dir.to_path_buf(),
                 config_dir.clone(),
-                launch_args,
+                _launch_args,
             )
             .await
             .map_err(AppError::ProcessError)?;
@@ -880,7 +882,7 @@ impl NetworkService {
         #[cfg(all(windows, debug_assertions))]
         {
             log::info!("🔧 开发模式 - 直接启动 EasyTier 进程（不使用 privileged helper）");
-            
+
             cmd.current_dir(working_dir)
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
@@ -1302,6 +1304,7 @@ impl NetworkService {
     }
 
     #[cfg(windows)]
+    #[allow(dead_code)]
     async fn monitor_helper(
         reader: tokio::net::tcp::OwnedReadHalf,
         virtual_ip: Arc<Mutex<Option<String>>>,
@@ -1371,6 +1374,7 @@ impl NetworkService {
     }
 
     #[cfg(windows)]
+    #[allow(dead_code)]
     async fn handle_helper_output(
         line: &str,
         is_stderr: bool,
@@ -1535,7 +1539,7 @@ impl NetworkService {
                     if parts.len() == 4 {
                         if let Ok(last_octet) = parts[3].parse::<u8>() {
                             // 只接受 1-254 的主机地址
-                            if last_octet >= 1 && last_octet <= 254 {
+                            if (1..=254).contains(&last_octet) {
                                 log::info!("✅ 从输出中提取到有效的虚拟 IP: {}", ip);
                                 *virtual_ip.lock().await = Some(ip.clone());
                                 *status.lock().await = ConnectionStatus::Connected(ip);
@@ -1597,6 +1601,7 @@ impl NetworkService {
     }
 
     /// 监控进程状态
+    #[allow(dead_code)]
     async fn monitor_process(
         process: Arc<Mutex<Option<Child>>>,
         status: Arc<Mutex<ConnectionStatus>>,
@@ -1659,23 +1664,16 @@ impl NetworkService {
 
     /// 从输出行中提取 IP 地址
     pub fn extract_ip_from_line(line: &str) -> Option<String> {
-        // 使用正则表达式匹配 IPv4 地址
-        // 匹配格式：xxx.xxx.xxx.xxx
-        let ip_pattern = regex::Regex::new(r"\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\b").ok()?;
+        use std::net::Ipv4Addr;
 
-        // 查找所有匹配的 IP 地址
-        for cap in ip_pattern.captures_iter(line) {
-            if let Some(ip_match) = cap.get(1) {
-                let ip = ip_match.as_str();
-
-                // 验证 IP 地址的有效性
-                if Self::is_valid_ip(ip) {
-                    // 只接受私有网络 IP 地址，并且排除本地回环地址
-                    if Self::is_private_ip(ip) && !Self::is_loopback(ip) {
-                        log::info!("从 EasyTier 输出中提取到候选虚拟IP: {}", ip);
-                        log::info!("输出行内容: {}", Self::redact_sensitive_line(line));
-                        return Some(ip.to_string());
-                    }
+        // 逐词扫描，尝试解析为 IPv4 地址
+        for word in line.split(|c: char| !c.is_ascii_digit() && c != '.') {
+            if let Ok(ip) = word.parse::<Ipv4Addr>() {
+                // 只接受私有网络 IP 地址，并且排除本地回环地址
+                if ip.is_private() && !ip.is_loopback() {
+                    log::info!("从 EasyTier 输出中提取到候选虚拟IP: {}", ip);
+                    log::info!("输出行内容: {}", Self::redact_sensitive_line(line));
+                    return Some(ip.to_string());
                 }
             }
         }
@@ -1687,31 +1685,16 @@ impl NetworkService {
     ///
     /// 本地回环地址范围：127.0.0.0/8 (127.0.0.0 - 127.255.255.255)
     pub fn is_loopback(ip: &str) -> bool {
-        let parts: Vec<u8> = ip.split('.').filter_map(|p| p.parse::<u8>().ok()).collect();
-
-        if parts.len() != 4 {
-            return false;
-        }
-
-        // 127.0.0.0/8
-        parts[0] == 127
+        use std::net::Ipv4Addr;
+        ip.parse::<Ipv4Addr>()
+            .map(|ip| ip.is_loopback())
+            .unwrap_or(false)
     }
 
     /// 验证 IP 地址是否有效
     pub fn is_valid_ip(ip: &str) -> bool {
-        let parts: Vec<&str> = ip.split('.').collect();
-        if parts.len() != 4 {
-            return false;
-        }
-
-        for part in parts {
-            // u8 类型范围是 0-255，所以只需要检查是否能解析为 u8
-            if part.parse::<u8>().is_err() {
-                return false;
-            }
-        }
-
-        true
+        use std::net::Ipv4Addr;
+        ip.parse::<Ipv4Addr>().is_ok()
     }
 
     /// 检查是否为私有网络 IP
@@ -1721,28 +1704,10 @@ impl NetworkService {
     /// - 172.16.0.0/12 (172.16.0.0 - 172.31.255.255)
     /// - 192.168.0.0/16 (192.168.0.0 - 192.168.255.255)
     pub fn is_private_ip(ip: &str) -> bool {
-        let parts: Vec<u8> = ip.split('.').filter_map(|p| p.parse::<u8>().ok()).collect();
-
-        if parts.len() != 4 {
-            return false;
-        }
-
-        // 10.0.0.0/8
-        if parts[0] == 10 {
-            return true;
-        }
-
-        // 172.16.0.0/12
-        if parts[0] == 172 && (16..=31).contains(&parts[1]) {
-            return true;
-        }
-
-        // 192.168.0.0/16
-        if parts[0] == 192 && parts[1] == 168 {
-            return true;
-        }
-
-        false
+        use std::net::Ipv4Addr;
+        ip.parse::<Ipv4Addr>()
+            .map(|ip| ip.is_private())
+            .unwrap_or(false)
     }
 
     /// 停止 EasyTier 服务

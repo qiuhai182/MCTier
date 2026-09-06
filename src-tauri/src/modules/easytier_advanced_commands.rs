@@ -63,7 +63,7 @@ pub async fn get_global_easytier_advanced_config(
     let advanced_config = config
         .global_easytier_advanced_config
         .clone()
-        .unwrap_or_else(|| crate::modules::config_manager::EasyTierAdvancedConfig::default());
+        .unwrap_or_else(crate::modules::config_manager::EasyTierAdvancedConfig::default);
 
     // 序列化为 JSON
     serde_json::to_value(&advanced_config).map_err(|e| format!("序列化配置失败: {}", e))
@@ -145,7 +145,7 @@ pub async fn get_lobby_easytier_advanced_config(
     let advanced_config = config
         .lobby_easytier_advanced_config
         .clone()
-        .unwrap_or_else(|| crate::modules::config_manager::EasyTierAdvancedConfig::default());
+        .unwrap_or_else(crate::modules::config_manager::EasyTierAdvancedConfig::default);
 
     // 序列化为 JSON
     serde_json::to_value(&advanced_config).map_err(|e| format!("序列化配置失败: {}", e))

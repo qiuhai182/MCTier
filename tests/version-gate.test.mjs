@@ -20,22 +20,22 @@ const app = stripComments(read('src/App.tsx'));
 const miniWindow = stripComments(read('src/components/MiniWindow/MiniWindow.tsx'));
 const webrtc = stripComments(read('src/services/webrtc/WebRTCClient.ts'));
 const androidRepo = stripComments(
-  read('MCTier-Android/app/src/main/java/top/pmh13/mctier/MctierRepository.kt'),
+  read('android/app/src/main/java/top/pmh13/mctier/MctierRepository.kt'),
 );
 const androidUi = stripComments(
-  read('MCTier-Android/app/src/main/java/top/pmh13/mctier/ui/MctierApp.kt'),
+  read('android/app/src/main/java/top/pmh13/mctier/ui/MctierApp.kt'),
 );
 
 // 客户端上报的版本号必须是纯 x.y.z：信令服务器的 is_version_valid 只接受三段数字，
 // 带后缀（例如 "3.0.0-android"）会被判成非法版本而直接拒绝。
 test('android reports a bare x.y.z client version, not the -android versionName', () => {
-  const models = read('MCTier-Android/app/src/main/java/top/pmh13/mctier/data/Models.kt');
+  const models = read('android/app/src/main/java/top/pmh13/mctier/data/Models.kt');
   const declared = /const val AppClientVersion = "([^"]+)"/.exec(models);
   assert.ok(declared, 'AppClientVersion should be declared');
   assert.match(declared[1], /^\d+\.\d+\.\d+$/, 'must be bare x.y.z');
 
   const signaling = read(
-    'MCTier-Android/app/src/main/java/top/pmh13/mctier/network/SignalingClient.kt',
+    'android/app/src/main/java/top/pmh13/mctier/network/SignalingClient.kt',
   );
   assert.match(signaling, /clientVersion = AppClientVersion/);
 });

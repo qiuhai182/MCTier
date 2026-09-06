@@ -180,23 +180,22 @@ impl VoiceService {
 
         // 注意：这里是模拟实现，实际项目中需要使用 cpal 或其他音频库
         // 来真正枚举系统音频设备
-        let mut devices = Vec::new();
-
-        // 添加默认麦克风设备
-        devices.push(AudioDevice {
-            id: "default_mic".to_string(),
-            name: "默认麦克风".to_string(),
-            device_type: DeviceType::Microphone,
-            is_default: true,
-        });
-
-        // 添加默认扬声器设备
-        devices.push(AudioDevice {
-            id: "default_speaker".to_string(),
-            name: "默认扬声器".to_string(),
-            device_type: DeviceType::Speaker,
-            is_default: true,
-        });
+        let devices = vec![
+            // 添加默认麦克风设备
+            AudioDevice {
+                id: "default_mic".to_string(),
+                name: "默认麦克风".to_string(),
+                device_type: DeviceType::Microphone,
+                is_default: true,
+            },
+            // 添加默认扬声器设备
+            AudioDevice {
+                id: "default_speaker".to_string(),
+                name: "默认扬声器".to_string(),
+                device_type: DeviceType::Speaker,
+                is_default: true,
+            },
+        ];
 
         // 更新内部设备列表
         let mut audio_devices = self.audio_devices.write().await;

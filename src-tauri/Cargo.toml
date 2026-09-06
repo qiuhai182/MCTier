@@ -26,22 +26,20 @@ tauri-plugin-deep-link = "2"
 tauri-plugin-single-instance = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["full"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "fs", "sync", "time", "signal", "process", "rt"] }
 tokio-tungstenite = "0.24"
-tokio-stream = { version = "0.1", features = ["sync"] }
 futures-util = "0.3"
 thiserror = "2"
 log = "0.4"
 env_logger = "0.11"
 dirs = "5"
 chrono = { version = "0.4", features = ["serde"] }
-regex = "1"
 uuid = { version = "1", features = ["v4", "serde"] }
 rand = "0.8"
 reqwest = { version = "0.12", features = ["blocking", "stream", "json"] }
 rfd = "0.15"
-urlencoding = "2.1"
-base64 = "0.22"
+percent-encoding = "2"
+base64ct = "1"
 # 聊天鉴权：每个成员一对 P-256 密钥，消息由私钥签名、接收方用信令下发的
 # 公钥验签。选 P-256 而非 Ed25519 是为了与 Android 端互通——Android 的
 # `KeyPairGenerator("Ed25519")` 要 API 33+，而本项目 minSdk 为 26，
@@ -50,13 +48,10 @@ p256 = "0.13"
 sha2 = "0.10"
 # 高性能文件传输
 bytes = "1"
-dashmap = "6"
 parking_lot = "0.12"
 # HTTP 文件服务器
-axum = "0.7"
-tower = "0.4"
-tower-http = { version = "0.5", features = ["fs", "cors", "trace"] }
-async-stream = "0.3"
+axum = { version = "0.7", features = ["multipart"] }
+tower-http = { version = "0.5", features = ["cors"] }
 # ZIP 压缩
 zip = "2"
 

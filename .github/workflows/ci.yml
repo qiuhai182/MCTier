@@ -141,7 +141,7 @@ jobs:
       - name: Fetch third-party binaries (Linux)
         # resource_manager.rs 在 Linux 上 include_bytes! 内嵌 EasyTier 的 Linux 二进制，
         # 这些文件不入库，编译前必须先获取并校验 SHA-256。
-        run: ./MCTier-Linux/scripts/fetch-binaries.sh
+        run: ./linux/scripts/fetch-binaries.sh
 
       - name: Check
         working-directory: src-tauri
@@ -164,14 +164,14 @@ jobs:
         run: |
           set -e
           sudo apt-get install -y shellcheck
-          shellcheck MCTier-Linux/scripts/*.sh
+          shellcheck linux/scripts/*.sh
 
       - name: Validate desktop entry and polkit policy
         run: |
           set -e
           sudo apt-get install -y desktop-file-utils libxml2-utils
-          desktop-file-validate MCTier-Linux/packaging/mctier.desktop
-          xmllint --noout MCTier-Linux/packaging/com.mctier.app.policy
+          desktop-file-validate linux/packaging/mctier.desktop
+          xmllint --noout linux/packaging/com.mctier.app.policy
 
   android:
     name: Android (assembleDebug)
@@ -189,7 +189,7 @@ jobs:
       - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
 
       - name: Assemble debug APK
-        working-directory: MCTier-Android
+        working-directory: android
         run: ./gradlew assembleDebug --no-daemon
 
   license-check:

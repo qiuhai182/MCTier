@@ -4,7 +4,13 @@
  */
 
 import { invoke } from '@tauri-apps/api/core';
-import { SharedFolder, SharedFolderSummary, FileInfo, PlayerShare } from '../../types/fileShare';
+import {
+  SharedFolder,
+  SharedFolderSummary,
+  FileInfo,
+  PlayerShare,
+  TextShare,
+} from '../../types/fileShare';
 
 class FileShareService {
   private localShares: SharedFolder[] = [];
@@ -60,7 +66,7 @@ class FileShareService {
     try {
       // 注意：后端Rust参数名使用下划线命名
       await invoke('remove_shared_folder', { share_id: shareId });
-      this.localShares = this.localShares.filter(s => s.id !== shareId);
+      this.localShares = this.localShares.filter((s) => s.id !== shareId);
       console.log('✅ 删除共享成功:', shareId);
     } catch (error) {
       console.error('❌ 删除共享失败:', error);
@@ -101,11 +107,13 @@ class FileShareService {
   async getRemoteShares(peerIp: string): Promise<SharedFolderSummary[]> {
     try {
       console.log(`📡 [FileShareService] 正在获取远程共享: ${peerIp}`);
-      console.log(`📡 [FileShareService] 调用 invoke('get_remote_shares', { peerIp: '${peerIp}' })`);
-      
+      console.log(
+        `📡 [FileShareService] 调用 invoke('get_remote_shares', { peerIp: '${peerIp}' })`
+      );
+
       // Tauri会自动将驼峰命名peerIp转换为Rust的下划线命名peer_ip
       const shares = await invoke<SharedFolderSummary[]>('get_remote_shares', { peerIp });
-      
+
       console.log(`✅ [FileShareService] 成功获取 ${shares.length} 个共享`);
       if (shares.length > 0) {
         console.log(`📋 [FileShareService] 共享列表:`, shares);
@@ -146,11 +154,7 @@ class FileShareService {
   /**
    * 验证共享密码
    */
-  async verifyPassword(
-    peerIp: string,
-    shareId: string,
-    password: string
-  ): Promise<boolean> {
+  async verifyPassword(peerIp: string, shareId: string, password: string): Promise<boolean> {
     try {
       // 注意：后端Rust参数名使用下划线命名
       const result = await invoke<boolean>('verify_share_password', {
@@ -168,11 +172,7 @@ class FileShareService {
   /**
    * 获取文件下载URL
    */
-  async getDownloadUrl(
-    peerIp: string,
-    shareId: string,
-    filePath: string
-  ): Promise<string> {
+  async getDownloadUrl(peerIp: string, shareId: string, filePath: string): Promise<string> {
     try {
       // 注意：后端Rust参数名使用下划线命名
       const url = await invoke<string>('get_download_url', {
@@ -190,11 +190,7 @@ class FileShareService {
   /**
    * 更新玩家共享信息
    */
-  async updatePlayerShares(
-    playerId: string,
-    playerName: string,
-    virtualIp: string
-  ): Promise<void> {
+  async updatePlayerShares(playerId: string, playerName: string, virtualIp: string): Promise<void> {
     try {
       const shares = await this.getRemoteShares(virtualIp);
       this.playerShares.set(playerId, {
@@ -237,6 +233,136 @@ class FileShareService {
    */
   isServerStarted(): boolean {
     return this.serverStarted;
+  }
+
+  /**
+   * 获取上传URL
+   */
+  async getUploadUrl(peerIp: string, shareId: string): Promise<string> {
+    try {
+      const url = await invoke<string>('get_upload_url', {
+        peer_ip: peerIp,
+        share_id: shareId,
+      });
+      return url;
+    } catch (error) {
+      console.error('❌ 获取上传URL失败:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * 在远程共享上创建目录
+   */
+  async createRemoteDirectory(
+    peerIp: string,
+    shareId: string,
+    path: string,
+    password?: string
+  ): Promise<void> {
+    try {
+      await invoke('create_remote_directory', {
+        peer_ip: peerIp,
+        share_id: shareId,
+        path,
+        password: password || null,
+      });
+    } catch (error) {
+      console.error('❌ 创建远程目录失败:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * 在远程共享上重命名文件或目录
+   */
+  async renameRemoteItem(
+    peerIp: string,
+    shareId: string,
+    oldPath: string,
+    newPath: string,
+    password?: string
+  ): Promise<void> {
+    try {
+      await invoke('rename_remote_item', {
+        peer_ip: peerIp,
+        share_id: shareId,
+        old_path: oldPath,
+        new_path: newPath,
+        password: password || null,
+      });
+    } catch (error) {
+      console.error('❌ 重命名远程文件失败:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * 在远程共享上删除文件或目录
+   */
+  async deleteRemoteItem(
+    peerIp: string,
+    shareId: string,
+    path: string,
+    password?: string
+  ): Promise<void> {
+    try {
+      await invoke('delete_remote_item', {
+        peer_ip: peerIp,
+        share_id: shareId,
+        path,
+        password: password || null,
+      });
+    } catch (error) {
+      console.error('❌ 删除远程文件失败:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * 创建文本分享
+   */
+  async createRemoteTextShare(
+    peerIp: string,
+    shareId: string,
+    text: string,
+    password?: string
+  ): Promise<TextShare> {
+    try {
+      const result = await invoke<TextShare>('create_remote_text_share', {
+        peer_ip: peerIp,
+        share_id: shareId,
+        text,
+        password: password || null,
+      });
+      return result;
+    } catch (error) {
+      console.error('❌ 创建文本分享失败:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * 获取文本分享
+   */
+  async getRemoteTextShare(
+    peerIp: string,
+    shareId: string,
+    textId: string,
+    password?: string
+  ): Promise<TextShare> {
+    try {
+      const result = await invoke<TextShare>('get_remote_text_share', {
+        peer_ip: peerIp,
+        share_id: shareId,
+        text_id: textId,
+        password: password || null,
+      });
+      return result;
+    } catch (error) {
+      console.error('❌ 获取文本分享失败:', error);
+      throw error;
+    }
   }
 
   // ==================== 兼容旧WebRTC API的方法（临时） ====================

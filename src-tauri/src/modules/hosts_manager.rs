@@ -2,8 +2,12 @@
 // 用于实现MCTier专属的Magic DNS功能
 
 use crate::modules::error::AppError;
-use std::fs::{File, OpenOptions};
-use std::io::{Read, Write};
+use std::fs::File;
+#[cfg(not(windows))]
+use std::fs::OpenOptions;
+use std::io::Read;
+#[cfg(not(windows))]
+use std::io::Write;
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 
@@ -207,36 +211,37 @@ impl HostsManager {
             // 开发模式：跳过 hosts 文件写入
             #[cfg(debug_assertions)]
             {
+                let _ = (path, content);
                 log::info!("🔧 开发模式 - 跳过 hosts 文件写入");
-                return Ok(());
+                Ok(())
             }
 
             // 生产模式：通过 privileged helper 写入
             #[cfg(not(debug_assertions))]
             {
-            use sha2::{Digest, Sha256};
+                use sha2::{Digest, Sha256};
 
-            if path != crate::modules::windows_paths::hosts_path() {
-                return Err(AppError::FileError("拒绝写入非系统 hosts 路径".to_string()));
+                if path != crate::modules::windows_paths::hosts_path() {
+                    return Err(AppError::FileError("拒绝写入非系统 hosts 路径".to_string()));
+                }
+                let current = std::fs::read(path)
+                    .map_err(|e| AppError::FileError(format!("读取 hosts 文件失败: {}", e)))?;
+                let expected_sha256 = Sha256::digest(&current)
+                    .iter()
+                    .map(|byte| format!("{:02x}", byte))
+                    .collect::<String>();
+                crate::modules::privileged_helper::run_one_shot(
+                    crate::modules::privileged_helper::HelperRequest::WriteHosts {
+                        expected_sha256,
+                        content: content.to_string(),
+                    },
+                )
+                .map_err(|error| {
+                    AppError::FileError(format!("无法通过特权 helper 写入 hosts 文件: {}", error))
+                })?;
+                return Ok(());
             }
-            let current = std::fs::read(path)
-                .map_err(|e| AppError::FileError(format!("读取 hosts 文件失败: {}", e)))?;
-            let expected_sha256 = Sha256::digest(&current)
-                .iter()
-                .map(|byte| format!("{:02x}", byte))
-                .collect::<String>();
-            crate::modules::privileged_helper::run_one_shot(
-                crate::modules::privileged_helper::HelperRequest::WriteHosts {
-                    expected_sha256,
-                    content: content.to_string(),
-                },
-            )
-            .map_err(|error| {
-                AppError::FileError(format!("无法通过特权 helper 写入 hosts 文件: {}", error))
-            })?;
-            return Ok(());
         }
-            }
 
         #[cfg(not(windows))]
         {

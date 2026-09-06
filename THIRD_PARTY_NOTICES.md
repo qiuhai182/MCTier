@@ -69,7 +69,7 @@ LGPL-3.0 要求许可证文本随发行版一同提供，因此两端均**不依
 - **Windows 桌面端**：`src-tauri/tauri.conf.json` 的 `bundle.resources` 将 `LICENSE`、
   `THIRD_PARTY_NOTICES.md`、`licenses/*`（含 LGPL-3.0 与 GPL-3.0 全文）以及 Android 端的
   EasyTier 补丁一并打进安装包的 `licenses/` 目录；应用「关于」窗口另有第三方组件声明区块。
-- **Android 端**：`MCTier-Android/app/build.gradle.kts` 的 `syncLicenseAssets` 任务在构建时
+- **Android 端**：`android/app/build.gradle.kts` 的 `syncLicenseAssets` 任务在构建时
   从仓库根目录复制 `LICENSE`（打包为 `LICENSE.txt`）、`LICENSE-LGPL-3.0.txt`、
   `LICENSE-GPL-3.0.txt`、`THIRD_PARTY_NOTICES.md` 与 EasyTier 补丁进 APK 的 `assets/`；
   「关于 → 开源许可与第三方组件」可直接在应用内查看这些全文。
@@ -117,9 +117,9 @@ MCTier 发布包中分发的 EasyTier 二进制（构建时取自 `src-tauri/res
 - `libeasytier_ffi.so`：EasyTier 的 C ABI 动态库（`easytier-contrib/easytier-ffi`）。
 - `libeasytier_android_jni.so`：EasyTier 的 Android JNI 动态库
   （`easytier-contrib/easytier-android-jni`），动态链接 `libeasytier_ffi.so`。
-- 位置：`MCTier-Android/app/src/main/jniLibs/arm64-v8a/`（已纳入 Git 版本库），
+- 位置：`android/app/src/main/jniLibs/arm64-v8a/`（已纳入 Git 版本库），
   安装后位于 APK 的 `lib/arm64-v8a/`。
-- 由 `MCTier-Android/scripts/build-easytier-jni.ps1` 通过 Android NDK 交叉编译产生。
+- 由 `android/scripts/build-easytier-jni.ps1` 通过 Android NDK 交叉编译产生。
 
 **修改状态：已修改（B）**
 
@@ -167,7 +167,7 @@ tag 为基线**的完整差异记录，其中同时包含「上游中间提交�
 
 以 v2.6.0 源码为基线应用该补丁后，所得源码与 MCTier 实际构建所用源码逐字节一致
 （已对补丁涉及的全部 22 个文件校验通过）。复核步骤见
-`docs/android/rebuild-with-modified-easytier.md`。
+`docs/rebuild-with-modified-easytier.md`。
 
 构建产物 SHA-256（供对应关系参考；Rust 构建默认不保证比特级可复现）：
 
@@ -189,7 +189,7 @@ tag 为基线**的完整差异记录，其中同时包含「上游中间提交�
      （https://github.com/EasyTier/EasyTier/releases/tag/v2.6.0）
 2. **MCTier 所作修改**：本仓库 `patches/easytier-2.6.0-mctier-android.patch`
    （随源码仓库公开分发，GitHub 与 Gitee 镜像均可获取）。
-3. **重新构建说明**：`docs/android/rebuild-with-modified-easytier.md`。
+3. **重新构建说明**：`docs/rebuild-with-modified-easytier.md`。
 
 MCTier 承诺在提供对应发布版本期间持续保持上述源码与补丁可公开获取。
 

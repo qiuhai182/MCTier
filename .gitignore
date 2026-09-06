@@ -14,30 +14,33 @@ node_modules
 dist
 dist-ssr
 *.local
+releases/
 
 # Android / Gradle
 MCTier-Android.apk
 *.apk
-MCTier-Android/.gradle/
-MCTier-Android/.kotlin/
-MCTier-Android/build/
-MCTier-Android/app/build/
-MCTier-Android/local.properties
-MCTier-Android/.idea/
-MCTier-Android/.cxx/
-MCTier-Android/.externalNativeBuild/
-MCTier-Android/captures/
-MCTier-Android/*.apk
-MCTier-Android/*.aab
-MCTier-Android/*.ap_
-MCTier-Android/*.dex
-MCTier-Android/ui_now.xml
-MCTier-Android/screen_now.png
-MCTier-Android/color_sample.txt
+android/.gradle/
+android/.kotlin/
+android/build/
+android/app/build/
+android/local.properties
+android/.idea/
+android/.cxx/
+android/.externalNativeBuild/
+android/captures/
+android/*.apk
+android/*.aab
+android/*.ap_
+android/*.dex
+android/ui_now.xml
+android/screen_now.png
+android/color_sample.txt
 
 # Tauri / Rust
 src-tauri/target
 src-tauri/WixTools
+# Tauri 构建时自动生成的 JSON Schema（tauri.conf.json 校验用），无需版本库
+src-tauri/gen/
 
 # Compiled executables
 *.exe
@@ -46,7 +49,7 @@ src-tauri/WixTools
 *.sys
 # Linux 侧的 EasyTier 二进制没有扩展名，*.exe 之类的规则挡不住，需要显式忽略。
 # 与 Windows 二进制同理：第三方产物、体积大，构建前用
-# MCTier-Linux/scripts/fetch-binaries.sh 获取并校验 SHA-256。
+# linux/scripts/fetch-binaries.sh 获取并校验 SHA-256。
 src-tauri/resources/binaries/linux/
 
 # Config directories
@@ -86,7 +89,26 @@ VOICE_DEBUG_GUIDE.md
 Thumbs.db
 .DS_Store
 
+# 下载内容（第三方安装包等，本地按需获取，不入库）
+download/
+
 # 一次性脚本 / 构建日志 / 过期的更新元数据（见 issue #17）
 /0
+/upLoad.sh
 /buildout.txt
 /latest.json
+
+# 临时与缓存文件
+*.tmp
+*.bak
+*.orig
+.eslintcache
+*.tsbuildinfo
+
+# 测试覆盖率产物
+coverage/
+.nyc_output/
+
+# IDE / 工具隐藏目录（勿用 "**/.*/" 通配，会误伤 .github/.husky 等）
+.trae/
+.history/

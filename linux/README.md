@@ -6,7 +6,7 @@ Linux 独有的构建、打包与运行时资产。
 
 ## 为什么不在这里再放一份源码
 
-需求原本是"新增 MCTier-Linux 文件夹放 Linux 版源码"，同时"Linux 端与 Windows 端
+需求原本是"新增 linux 文件夹放 Linux 版源码"，同时"Linux 端与 Windows 端
 同步更新"。这两条实际是冲突的：一旦复制出第二份源码，两边必然随提交发散，
 "同步更新"就只能靠人工逐个搬运补丁，迟早漏。所以这里采取的是单一源码 + 条件编译：
 
@@ -30,9 +30,9 @@ Linux 独有的构建、打包与运行时资产。
 
 ```bash
 cd MCTier桌面应用
-./MCTier-Linux/scripts/install-deps.sh      # 装系统依赖（需要 sudo）
-./MCTier-Linux/scripts/fetch-binaries.sh    # 取 EasyTier 二进制并校验 SHA-256
-./MCTier-Linux/scripts/build.sh             # 构建并打包
+./linux/scripts/install-deps.sh      # 装系统依赖（需要 sudo）
+./linux/scripts/fetch-binaries.sh    # 取 EasyTier 二进制并校验 SHA-256
+./linux/scripts/build.sh             # 构建并打包
 ```
 
 产物在 `src-tauri/target/release/bundle/` 下。
@@ -117,7 +117,7 @@ $MCTIER_WEBKIT_LIB_DIR
 fork 作者按上述方式自建了 `ENABLE_WEB_RTC=ON` 的 WebKitGTK 并确认加载成功
 （`/proc/<pid>/maps` 可见），此时组网 / 大厅 / 聊天 / 图片 / 文件夹共享均正常，
 但**开麦即整页卡死，100% 复现**。他抓到了双线程栈（归档在其 fork 的
-`MCTier-Linux/verification/`）：WebProcess 内两个线程都停在 `gst_pad_push_event`
+`linux/verification/`）：WebProcess 内两个线程都停在 `gst_pad_push_event`
 并互相等对方持有的锁，属于 GStreamer 核心的 ABBA 死锁；同一时刻麦克风采集线程
 （`gst_audio_ring_buffer_read`）与音频播放线程都还在正常跑——**音频数据面是活的，
 事件面互相等锁**。GStreamer 1.26.2。
@@ -140,7 +140,7 @@ WebAudio↔GStreamer 桥接，而死锁栈正好卡在这段管线上。该多�
 - GStreamer：<https://gitlab.freedesktop.org/gstreamer/gstreamer/-/issues/5282>
 - WebKit：<https://bugs.webkit.org/show_bug.cgi?id=322955>
 
-验证证据（死锁双栈、对照实验栈）归档在 fork 的 `MCTier-Linux/verification/`。
+验证证据（死锁双栈、对照实验栈）归档在 fork 的 `linux/verification/`。
 
 ### 输入法在密码框吞键
 

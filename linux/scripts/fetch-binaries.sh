@@ -30,7 +30,7 @@ CLI_SHA256="E339AEA31943F0C5CED2A5A6ECDD675DA3BB25843CF847107744E656F8200838"
 MAX_ARCHIVE_BYTES=$((128 * 1024 * 1024))
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-# MCTier-Linux/scripts -> MCTier-Linux -> MCTier桌面应用
+# linux/scripts -> linux -> MCTier桌面应用
 DESKTOP_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
 TARGET_DIR="${DESKTOP_ROOT}/src-tauri/resources/binaries/linux"
 
@@ -125,4 +125,4 @@ install -m 0755 -- "${WORK_DIR}/extracted/easytier-cli" "${TARGET_DIR}/easytier-
 
 log ""
 log "完成。EasyTier Linux 二进制已就位: ${TARGET_DIR}"
-log "现在可以执行 MCTier-Linux/scripts/build.sh 进行构建。"
+log "现在可以执行 linux/scripts/build.sh 进行构建。"

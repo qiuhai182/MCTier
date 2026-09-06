@@ -6,7 +6,7 @@ import { build } from 'esbuild';
 
 const sourceFile = fileURLToPath(new URL('../src/services/remoteControl/RemoteControlService.ts', import.meta.url));
 const serviceSource = fs.readFileSync(sourceFile, 'utf8');
-const androidRepository = fs.readFileSync(new URL('../MCTier-Android/app/src/main/java/top/pmh13/mctier/MctierRepository.kt', import.meta.url), 'utf8');
+const androidRepository = fs.readFileSync(new URL('../android/app/src/main/java/top/pmh13/mctier/MctierRepository.kt', import.meta.url), 'utf8');
 let moduleVersion = 0;
 
 async function loadService() {

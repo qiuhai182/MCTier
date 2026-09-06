@@ -33,8 +33,6 @@ use futures_util::stream::Stream;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, Mutex};
-use tokio_stream::wrappers::BroadcastStream;
-use tokio_stream::StreamExt;
 
 use super::chat_auth::{
     canonical_request, is_fresh_timestamp, is_valid_key_id, is_valid_nonce, key_id_for_public_key,
@@ -183,6 +181,12 @@ pub struct ChatService {
     /// Signing identity for the current lobby session. Recreated on every
     /// session so leaving a lobby retires the key permanently.
     signer: Arc<RwLock<Option<Arc<ChatSigner>>>>,
+}
+
+impl Default for ChatService {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ChatService {
@@ -840,7 +844,7 @@ fn validate_request(
     {
         return Err(StatusCode::BAD_REQUEST);
     }
-    let content_bytes = request.content.as_bytes().len();
+    let content_bytes = request.content.len();
     match request.message_type {
         MessageType::Text => {
             if content_bytes == 0 || content_bytes > MAX_TEXT_BYTES || request.image_data.is_some()
@@ -1051,11 +1055,22 @@ async fn stream_messages(
         return Err(StatusCode::TOO_MANY_REQUESTS);
     }
     let receiver = state.message_tx.subscribe();
-    let stream = BroadcastStream::new(receiver).filter_map(|result| match result {
-        Ok(message) => serde_json::to_string(&message)
-            .ok()
-            .map(|json| Ok(Event::default().data(json))),
-        Err(_) => None,
+    let stream = futures_util::stream::unfold(receiver, |mut rx| async move {
+        loop {
+            match rx.recv().await {
+                Ok(message) => {
+                    let json = match serde_json::to_string(&message) {
+                        Ok(json) => json,
+                        Err(_) => continue,
+                    };
+                    return Some((Ok(Event::default().data(json)), rx));
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                    continue;
+                }
+                Err(_) => return None,
+            }
+        }
     });
     Ok(Sse::new(stream).keep_alive(
         KeepAlive::new()

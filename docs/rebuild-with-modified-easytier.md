@@ -15,10 +15,10 @@
 | `libeasytier_ffi.so` | `lib/arm64-v8a/libeasytier_ffi.so` | `easytier-contrib/easytier-ffi` | LGPL-3.0 |
 | `libeasytier_android_jni.so` | `lib/arm64-v8a/libeasytier_android_jni.so` | `easytier-contrib/easytier-android-jni` | LGPL-3.0 |
 
-仓库内源路径：`MCTier-Android/app/src/main/jniLibs/<abi>/`
+仓库内源路径：`android/app/src/main/jniLibs/<abi>/`
 
 `libeasytier_android_jni.so` 动态链接 `libeasytier_ffi.so`；Android 侧由
-`MCTier-Android/app/src/main/java/com/easytier/jni/EasyTierJNI.kt` 通过 JNI 调用。
+`android/app/src/main/java/com/easytier/jni/EasyTierJNI.kt` 通过 JNI 调用。
 
 ---
 
@@ -78,7 +78,7 @@ LGPL-3.0 允许你自由修改 EasyTier 部分。
 推荐直接使用仓库提供的脚本（会自动配置 NDK 交叉编译环境变量）：
 
 ```powershell
-cd MCTier桌面应用\MCTier-Android
+cd MCTier桌面应用\android
 .\scripts\build-easytier-jni.ps1 -EasyTierRoot <你的 EasyTier 源码目录> -Abis arm64-v8a
 ```
 
@@ -104,11 +104,11 @@ cargo build --target aarch64-linux-android --release
 
 ```powershell
 # 1) 把新编译的 .so 覆盖到 jniLibs
-Copy-Item -Force <target>\release\libeasytier_ffi.so         MCTier-Android\app\src\main\jniLibs\arm64-v8a\
-Copy-Item -Force <target>\release\libeasytier_android_jni.so MCTier-Android\app\src\main\jniLibs\arm64-v8a\
+Copy-Item -Force <target>\release\libeasytier_ffi.so         android\app\src\main\jniLibs\arm64-v8a\
+Copy-Item -Force <target>\release\libeasytier_android_jni.so android\app\src\main\jniLibs\arm64-v8a\
 
 # 2) 构建 APK
-cd MCTier-Android
+cd android
 .\gradlew assembleRelease
 ```
 

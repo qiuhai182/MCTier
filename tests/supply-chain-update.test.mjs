@@ -17,7 +17,7 @@ test('desktop update metadata is bounded and cannot follow redirects', () => {
 });
 
 test('Android update metadata is bounded and rejects redirects', () => {
-  const checker = read('MCTier-Android/app/src/main/java/top/pmh13/mctier/network/UpdateChecker.kt');
+  const checker = read('android/app/src/main/java/top/pmh13/mctier/network/UpdateChecker.kt');
   assert.match(checker, /followRedirects\(false\)/);
   assert.match(checker, /followSslRedirects\(false\)/);
   assert.match(checker, /MaxVersionResponseBytes\s*=\s*256\s*\*\s*1024L/);
@@ -44,7 +44,7 @@ test('binary fetch script constrains network, archive, and publication paths', (
 });
 
 test('EasyTier JNI build pins source and locks Cargo dependencies', () => {
-  const script = read('MCTier-Android/scripts/build-easytier-jni.ps1');
+  const script = read('android/scripts/build-easytier-jni.ps1');
   assert.match(script, /Test-OfficialEasyTierRepo/);
   assert.match(script, /Test-ImmutableRevision/);
   assert.match(script, /Assert-CleanGitWorkTree/);
@@ -70,7 +70,7 @@ test('CI actions and Gradle distribution use immutable or verified sources', () 
   assert.match(workflow, /cargo-audit --version 0\.22\.2 --locked/);
   assert.match(workflow, /cargo-deny --version 0\.20\.2 --locked/);
 
-  const wrapper = read('MCTier-Android/gradle/wrapper/gradle-wrapper.properties');
+  const wrapper = read('android/gradle/wrapper/gradle-wrapper.properties');
   assert.match(wrapper, /distributionUrl=https\\:\/\/services\.gradle\.org\/distributions\//);
   assert.match(wrapper, /distributionSha256Sum=[0-9a-f]{64}/i);
 });

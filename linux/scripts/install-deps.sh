@@ -10,7 +10,7 @@ fail() { printf '错误: %s\n' "$*" >&2; exit 1; }
 log()  { printf '%s\n' "$*"; }
 
 command -v apt-get >/dev/null 2>&1 \
-  || fail "本脚本仅适用于 Debian 家族（需要 apt-get）。其他发行版请参考 MCTier-Linux/README.md 手动安装等价依赖。"
+  || fail "本脚本仅适用于 Debian 家族（需要 apt-get）。其他发行版请参考 linux/README.md 手动安装等价依赖。"
 
 if [[ "${EUID}" -eq 0 ]]; then
   SUDO=""
@@ -123,5 +123,5 @@ if (( missing )); then
 else
   log "依赖齐备。接下来执行:"
 fi
-log "  ./MCTier-Linux/scripts/fetch-binaries.sh"
-log "  ./MCTier-Linux/scripts/build.sh"
+log "  ./linux/scripts/fetch-binaries.sh"
+log "  ./linux/scripts/build.sh"

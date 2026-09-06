@@ -113,13 +113,15 @@ pub fn is_valid_nonce(value: &str) -> bool {
 }
 
 fn base64_decode(value: &str) -> Option<Vec<u8>> {
-    use base64::Engine;
-    base64::engine::general_purpose::STANDARD.decode(value).ok()
+    use base64ct::Base64;
+    use base64ct::Encoding;
+    Base64::decode_vec(value).ok()
 }
 
 fn base64_encode(value: &[u8]) -> String {
-    use base64::Engine;
-    base64::engine::general_purpose::STANDARD.encode(value)
+    use base64ct::Base64;
+    use base64ct::Encoding;
+    Base64::encode_string(value)
 }
 
 /// Reject anything that is not a well formed P-256 public key before it can be
@@ -150,6 +152,7 @@ pub fn parse_public_key_b64(encoded: &str) -> Option<Vec<u8>> {
 /// member from taking a request addressed to itself and forwarding it to a
 /// third member, who would otherwise accept it as freshly authored by the
 /// original signer.
+#[allow(clippy::too_many_arguments)]
 pub fn canonical_request(
     method: &str,
     path: &str,
@@ -244,6 +247,7 @@ impl ChatSigner {
     /// Sign a request and return the header material the peer needs.
     ///
     /// `audience` must be the virtual IP of the peer the request is sent to.
+    #[allow(clippy::too_many_arguments)]
     pub fn sign(
         &self,
         method: &str,

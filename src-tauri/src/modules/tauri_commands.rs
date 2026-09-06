@@ -5,6 +5,7 @@ use crate::modules::app_core::{AppCore, AppState as CoreAppState};
 use crate::modules::config_manager::UserConfig;
 use crate::modules::lobby_manager::{Lobby, Player};
 use crate::modules::voice_service::AudioDevice;
+use percent_encoding;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -16,9 +17,12 @@ use tauri::State;
 use tokio::sync::Mutex;
 
 /// 远程文件下载的取消标志注册表（task_id -> 取消标志）
-fn download_cancels() -> &'static dashmap::DashMap<String, Arc<AtomicBool>> {
-    static CANCELS: OnceLock<dashmap::DashMap<String, Arc<AtomicBool>>> = OnceLock::new();
-    CANCELS.get_or_init(dashmap::DashMap::new)
+fn download_cancels(
+) -> &'static parking_lot::RwLock<std::collections::HashMap<String, Arc<AtomicBool>>> {
+    static CANCELS: OnceLock<
+        parking_lot::RwLock<std::collections::HashMap<String, Arc<AtomicBool>>>,
+    > = OnceLock::new();
+    CANCELS.get_or_init(|| parking_lot::RwLock::new(std::collections::HashMap::new()))
 }
 
 const MAX_REMOTE_FILE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
@@ -460,6 +464,7 @@ pub struct AppState {
 /// * `Ok(Lobby)` - 成功创建的大厅信息
 /// * `Err(String)` - 错误信息
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn create_lobby(
     name: String,
     password: String,
@@ -519,7 +524,7 @@ pub async fn create_lobby(
             server_node,
             signaling_server.clone(),
             use_domain.unwrap_or(false),
-            &*network_svc,
+            &network_svc,
             &app_handle,
             global_config,
             lobby_config,
@@ -593,6 +598,7 @@ pub async fn create_lobby(
 /// * `Ok(Lobby)` - 成功加入的大厅信息
 /// * `Err(String)` - 错误信息
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn join_lobby(
     name: String,
     password: String,
@@ -654,7 +660,7 @@ pub async fn join_lobby(
             server_node,
             signaling_server.clone(),
             use_domain.unwrap_or(false),
-            &*network_svc,
+            &network_svc,
             &app_handle,
             global_config,
             lobby_config,
@@ -789,7 +795,7 @@ pub async fn leave_lobby(state: State<'_, AppState>) -> Result<(), String> {
     let mut lobby_mgr = lobby_manager.lock().await;
     let network_svc = network_service.lock().await;
 
-    match lobby_mgr.leave_lobby(&*network_svc).await {
+    match lobby_mgr.leave_lobby(&network_svc).await {
         Ok(_) => {
             log::info!("成功退出大厅");
             drop(lobby_mgr);
@@ -1279,7 +1285,7 @@ pub async fn exit_app(state: State<'_, AppState>, app: tauri::AppHandle) -> Resu
         // 退出大厅
         let mut lobby_mgr = lobby_manager.lock().await;
         let network_svc = network_service.lock().await;
-        if let Err(e) = lobby_mgr.leave_lobby(&*network_svc).await {
+        if let Err(e) = lobby_mgr.leave_lobby(&network_svc).await {
             log::warn!("退出大厅时发生错误: {}", e);
         }
     }
@@ -1525,7 +1531,7 @@ pub async fn toggle_mini_mode(mini_mode: bool, window: tauri::Window) -> Result<
 /// * `Err(String)` - 错误信息
 #[tauri::command]
 pub async fn set_window_opacity(opacity: f64, window: tauri::Window) -> Result<(), String> {
-    let clamped_opacity = opacity.max(0.3).min(1.0);
+    let clamped_opacity = opacity.clamp(0.3, 1.0);
 
     // 注意：不再使用 WS_EX_LAYERED + SetLayeredWindowAttributes(LWA_ALPHA)。
     // 该方式会用“整窗统一 alpha”覆盖 Tauri 的逐像素真透明（transparent:true），
@@ -1820,22 +1826,22 @@ pub async fn check_firewall_rules() -> Result<bool, String> {
         #[cfg(debug_assertions)]
         {
             log::info!("🔧 开发模式 - 跳过防火墙规则检查");
-            return Ok(true);
+            Ok(true)
         }
 
         // 生产模式：通过 privileged helper 检查
         #[cfg(not(debug_assertions))]
         {
-        let has_rules = crate::modules::privileged_helper::run_one_shot(
-            crate::modules::privileged_helper::HelperRequest::CheckFirewall,
-        )?
-        .and_then(|value| value.parse::<bool>().ok())
-        .unwrap_or(false);
+            let has_rules = crate::modules::privileged_helper::run_one_shot(
+                crate::modules::privileged_helper::HelperRequest::CheckFirewall,
+            )?
+            .and_then(|value| value.parse::<bool>().ok())
+            .unwrap_or(false);
 
-        log::info!("防火墙规则检查结果: {}", has_rules);
-        Ok(has_rules)
-    }
+            log::info!("防火墙规则检查结果: {}", has_rules);
+            Ok(has_rules)
         }
+    }
 
     #[cfg(target_os = "linux")]
     {
@@ -1887,39 +1893,39 @@ pub async fn is_admin() -> bool {
 ///
 /// 为 MCTier 主程序与 easytier-core 添加入站/出站允许规则。
 #[tauri::command]
-pub async fn add_firewall_rules(app_handle: tauri::AppHandle) -> Result<String, String> {
+pub async fn add_firewall_rules(_app_handle: tauri::AppHandle) -> Result<String, String> {
     #[cfg(windows)]
     {
         // 开发模式：跳过防火墙规则添加
         #[cfg(debug_assertions)]
         {
             log::info!("🔧 开发模式 - 跳过防火墙规则添加");
-            return Ok("开发模式：已跳过防火墙配置".to_string());
+            Ok("开发模式：已跳过防火墙配置".to_string())
         }
 
         // 生产模式：通过 privileged helper 添加规则
         #[cfg(not(debug_assertions))]
         {
-        let easytier_path =
-            crate::modules::resource_manager::ResourceManager::get_easytier_path(&app_handle)
-                .map_err(|e| e.to_string())?;
-        let value = crate::modules::privileged_helper::run_one_shot(
-            crate::modules::privileged_helper::HelperRequest::AddFirewall {
-                easytier_path: easytier_path.to_string_lossy().into_owned(),
-            },
-        )?;
-        Ok(value.unwrap_or_else(|| "防火墙规则已更新".to_string()))
-    }
+            let easytier_path =
+                crate::modules::resource_manager::ResourceManager::get_easytier_path(&_app_handle)
+                    .map_err(|e| e.to_string())?;
+            let value = crate::modules::privileged_helper::run_one_shot(
+                crate::modules::privileged_helper::HelperRequest::AddFirewall {
+                    easytier_path: easytier_path.to_string_lossy().into_owned(),
+                },
+            )?;
+            Ok(value.unwrap_or_else(|| "防火墙规则已更新".to_string()))
         }
+    }
     #[cfg(target_os = "linux")]
     {
-        let _ = app_handle;
+        let _ = _app_handle;
         crate::modules::linux_platform::add_firewall_rules().await
     }
 
     #[cfg(not(any(windows, target_os = "linux")))]
     {
-        let _ = app_handle;
+        let _ = _app_handle;
         Ok("当前平台无需配置防火墙".to_string())
     }
 }
@@ -3238,10 +3244,14 @@ pub async fn get_remote_files(
     let mut url = format!(
         "http://{}:14539/api/shares/{}/files",
         target.host,
-        urlencoding::encode(&share_id)
+        percent_encoding::utf8_percent_encode(&share_id, percent_encoding::NON_ALPHANUMERIC)
     );
     if let Some(p) = path {
-        url = format!("{}?path={}", url, urlencoding::encode(&p));
+        url = format!(
+            "{}?path={}",
+            url,
+            percent_encoding::utf8_percent_encode(&p, percent_encoding::NON_ALPHANUMERIC)
+        );
     }
 
     let client = reqwest::Client::builder()
@@ -3323,7 +3333,7 @@ pub async fn verify_share_password(
     let url = format!(
         "http://{}:14539/api/shares/{}/verify",
         target.host,
-        urlencoding::encode(&share_id)
+        percent_encoding::utf8_percent_encode(&share_id, percent_encoding::NON_ALPHANUMERIC)
     );
     let client = reqwest::Client::builder()
         .connect_timeout(std::time::Duration::from_secs(2))
@@ -3397,10 +3407,237 @@ pub async fn get_download_url(
     let url = format!(
         "http://{}:14539/api/shares/{}/download/{}",
         target.host,
-        urlencoding::encode(&share_id),
-        urlencoding::encode(&file_path)
+        percent_encoding::utf8_percent_encode(&share_id, percent_encoding::NON_ALPHANUMERIC),
+        percent_encoding::utf8_percent_encode(&file_path, percent_encoding::NON_ALPHANUMERIC)
     );
     Ok(url)
+}
+
+/// 获取文件上传URL（multipart upload endpoint）
+#[tauri::command]
+pub async fn get_upload_url(
+    peer_ip: String,
+    share_id: String,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    let target = require_file_peer_host(&peer_ip, &state).await?;
+    let url = format!(
+        "http://{}:14539/api/shares/{}/upload",
+        target.host,
+        percent_encoding::utf8_percent_encode(&share_id, percent_encoding::NON_ALPHANUMERIC),
+    );
+    Ok(url)
+}
+
+/// 在远程共享上创建目录
+#[tauri::command]
+pub async fn create_remote_directory(
+    peer_ip: String,
+    share_id: String,
+    path: String,
+    password: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let target = require_file_peer_host(&peer_ip, &state).await?;
+    let url = format!(
+        "http://{}:14539/api/shares/{}/mkdir",
+        target.host,
+        percent_encoding::utf8_percent_encode(&share_id, percent_encoding::NON_ALPHANUMERIC)
+    );
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("创建HTTP客户端失败: {}", e))?;
+
+    let mut req = client
+        .post(&url)
+        .header(
+            crate::modules::file_transfer::LOBBY_TOKEN_HEADER,
+            &target.token,
+        )
+        .header("Content-Type", "application/json")
+        .json(&serde_json::json!({ "path": path }));
+
+    if let Some(pwd) = password {
+        req = req.header("x-share-password", pwd);
+    }
+
+    let response = req.send().await.map_err(|e| format!("请求失败: {}", e))?;
+    if !response.status().is_success() {
+        return Err(format!("创建目录失败: HTTP {}", response.status()));
+    }
+    Ok(())
+}
+
+/// 在远程共享上重命名文件或目录
+#[tauri::command]
+pub async fn rename_remote_item(
+    peer_ip: String,
+    share_id: String,
+    old_path: String,
+    new_path: String,
+    password: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let target = require_file_peer_host(&peer_ip, &state).await?;
+    let url = format!(
+        "http://{}:14539/api/shares/{}/rename",
+        target.host,
+        percent_encoding::utf8_percent_encode(&share_id, percent_encoding::NON_ALPHANUMERIC)
+    );
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("创建HTTP客户端失败: {}", e))?;
+
+    let mut req = client
+        .post(&url)
+        .header(
+            crate::modules::file_transfer::LOBBY_TOKEN_HEADER,
+            &target.token,
+        )
+        .header("Content-Type", "application/json")
+        .json(&serde_json::json!({ "old_path": old_path, "new_path": new_path }));
+
+    if let Some(pwd) = password {
+        req = req.header("x-share-password", pwd);
+    }
+
+    let response = req.send().await.map_err(|e| format!("请求失败: {}", e))?;
+    if !response.status().is_success() {
+        return Err(format!("重命名失败: HTTP {}", response.status()));
+    }
+    Ok(())
+}
+
+/// 在远程共享上删除文件或目录
+#[tauri::command]
+pub async fn delete_remote_item(
+    peer_ip: String,
+    share_id: String,
+    path: String,
+    password: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let target = require_file_peer_host(&peer_ip, &state).await?;
+    let url = format!(
+        "http://{}:14539/api/shares/{}/delete",
+        target.host,
+        percent_encoding::utf8_percent_encode(&share_id, percent_encoding::NON_ALPHANUMERIC)
+    );
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("创建HTTP客户端失败: {}", e))?;
+
+    let mut req = client
+        .post(&url)
+        .header(
+            crate::modules::file_transfer::LOBBY_TOKEN_HEADER,
+            &target.token,
+        )
+        .header("Content-Type", "application/json")
+        .json(&serde_json::json!({ "path": path }));
+
+    if let Some(pwd) = password {
+        req = req.header("x-share-password", pwd);
+    }
+
+    let response = req.send().await.map_err(|e| format!("请求失败: {}", e))?;
+    if !response.status().is_success() {
+        return Err(format!("删除失败: HTTP {}", response.status()));
+    }
+    Ok(())
+}
+
+/// 在远程共享上创建文本分享
+#[tauri::command]
+pub async fn create_remote_text_share(
+    peer_ip: String,
+    share_id: String,
+    text: String,
+    password: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<crate::modules::file_transfer::TextShare, String> {
+    let target = require_file_peer_host(&peer_ip, &state).await?;
+    let url = format!(
+        "http://{}:14539/api/shares/{}/text",
+        target.host,
+        percent_encoding::utf8_percent_encode(&share_id, percent_encoding::NON_ALPHANUMERIC)
+    );
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("创建HTTP客户端失败: {}", e))?;
+
+    let mut req = client
+        .post(&url)
+        .header(
+            crate::modules::file_transfer::LOBBY_TOKEN_HEADER,
+            &target.token,
+        )
+        .header("Content-Type", "application/json")
+        .json(&serde_json::json!({ "text": text }));
+
+    if let Some(pwd) = password {
+        req = req.header("x-share-password", pwd);
+    }
+
+    let response = req.send().await.map_err(|e| format!("请求失败: {}", e))?;
+    if !response.status().is_success() {
+        return Err(format!("创建文本分享失败: HTTP {}", response.status()));
+    }
+
+    let body = read_remote_body_limited(response, MAX_REMOTE_METADATA_BYTES).await?;
+    let text_share: crate::modules::file_transfer::TextShare =
+        serde_json::from_slice(&body).map_err(|e| format!("解析响应失败: {}", e))?;
+    Ok(text_share)
+}
+
+/// 获取远程文本分享
+#[tauri::command]
+pub async fn get_remote_text_share(
+    peer_ip: String,
+    share_id: String,
+    text_id: String,
+    password: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<crate::modules::file_transfer::TextShare, String> {
+    let target = require_file_peer_host(&peer_ip, &state).await?;
+    let url = format!(
+        "http://{}:14539/api/shares/{}/text/{}",
+        target.host,
+        percent_encoding::utf8_percent_encode(&share_id, percent_encoding::NON_ALPHANUMERIC),
+        percent_encoding::utf8_percent_encode(&text_id, percent_encoding::NON_ALPHANUMERIC)
+    );
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("创建HTTP客户端失败: {}", e))?;
+
+    let mut req = client.get(&url).header(
+        crate::modules::file_transfer::LOBBY_TOKEN_HEADER,
+        &target.token,
+    );
+
+    if let Some(pwd) = password {
+        req = req.header("x-share-password", pwd);
+    }
+
+    let response = req.send().await.map_err(|e| format!("请求失败: {}", e))?;
+    if !response.status().is_success() {
+        return Err(format!("获取文本分享失败: HTTP {}", response.status()));
+    }
+
+    let body = read_remote_body_limited(response, MAX_REMOTE_METADATA_BYTES).await?;
+    let text_share: crate::modules::file_transfer::TextShare =
+        serde_json::from_slice(&body).map_err(|e| format!("解析响应失败: {}", e))?;
+    Ok(text_share)
 }
 
 async fn read_remote_body_limited(
@@ -3466,6 +3703,7 @@ async fn commit_download_part_noreplace(
 /// - 通过 `download-progress` 事件上报进度（taskId/downloaded/total）
 /// - 支持通过 `cancel_remote_download` 取消
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn download_remote_file(
     task_id: String,
     peer_ip: String,
@@ -3489,7 +3727,9 @@ pub async fn download_remote_file(
     );
 
     let cancel_flag = Arc::new(AtomicBool::new(false));
-    download_cancels().insert(task_id.clone(), cancel_flag.clone());
+    download_cancels()
+        .write()
+        .insert(task_id.clone(), cancel_flag.clone());
 
     // 用闭包包裹，确保无论成功失败都能清理取消标志
     let mut part_path: Option<std::path::PathBuf> = None;
@@ -3504,8 +3744,8 @@ pub async fn download_remote_file(
         let url = format!(
             "http://{}:14539/api/shares/{}/download/{}",
             target.host,
-            urlencoding::encode(&share_id),
-            urlencoding::encode(&file_path)
+            percent_encoding::utf8_percent_encode(&share_id, percent_encoding::NON_ALPHANUMERIC),
+            percent_encoding::utf8_percent_encode(&file_path, percent_encoding::NON_ALPHANUMERIC)
         );
 
         let client = reqwest::Client::builder()
@@ -3657,14 +3897,14 @@ pub async fn download_remote_file(
         }
     }
 
-    download_cancels().remove(&task_id);
+    download_cancels().write().remove(&task_id);
     result
 }
 
 /// 取消正在进行的远程文件下载
 #[tauri::command]
 pub fn cancel_remote_download(task_id: String) {
-    if let Some(flag) = download_cancels().get(&task_id) {
+    if let Some(flag) = download_cancels().read().get(&task_id).cloned() {
         flag.store(true, Ordering::Relaxed);
         log::info!("🛑 已请求取消下载: {}", task_id);
     }
@@ -3672,6 +3912,7 @@ pub fn cancel_remote_download(task_id: String) {
 
 /// 流式批量打包下载：POST file_paths 到对端 batch-download，边收边写盘到 save_path
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn download_remote_batch(
     task_id: String,
     peer_ip: String,
@@ -3703,7 +3944,9 @@ pub async fn download_remote_batch(
     }
 
     let cancel_flag = Arc::new(AtomicBool::new(false));
-    download_cancels().insert(task_id.clone(), cancel_flag.clone());
+    download_cancels()
+        .write()
+        .insert(task_id.clone(), cancel_flag.clone());
 
     let mut part_path: Option<std::path::PathBuf> = None;
     let mut committed = false;
@@ -3713,7 +3956,7 @@ pub async fn download_remote_batch(
         let url = format!(
             "http://{}:14539/api/shares/{}/batch-download",
             target.host,
-            urlencoding::encode(&share_id)
+            percent_encoding::utf8_percent_encode(&share_id, percent_encoding::NON_ALPHANUMERIC)
         );
         let client = reqwest::Client::builder()
             .connect_timeout(std::time::Duration::from_secs(5))
@@ -3836,7 +4079,7 @@ pub async fn download_remote_batch(
         }
     }
 
-    download_cancels().remove(&task_id);
+    download_cancels().write().remove(&task_id);
     result
 }
 
@@ -3960,7 +4203,7 @@ pub async fn detect_security_software() -> Vec<String> {
         ];
 
         let output = tokio::process::Command::new(windows_system_command("tasklist.exe"))
-            .args(&["/fo", "csv", "/nh"])
+            .args(["/fo", "csv", "/nh"])
             .creation_flags(CREATE_NO_WINDOW)
             .output()
             .await;
@@ -4180,7 +4423,7 @@ fn is_symlink_or_reparse_point(metadata: &std::fs::Metadata) -> bool {
 
         // FILE_ATTRIBUTE_REPARSE_POINT. Junctions and other reparse points can
         // redirect extraction outside of the user-selected directory.
-        return metadata.file_attributes() & 0x400 != 0;
+        metadata.file_attributes() & 0x400 != 0
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -4871,15 +5114,13 @@ pub async fn save_file(path: String, data: Vec<u8>) -> Result<(), String> {
 /// * `Err(String)` - 错误信息
 #[tauri::command]
 pub async fn save_chat_image(image_data: String) -> Result<String, String> {
-    use base64::{engine::general_purpose, Engine as _};
+    use base64ct::{Base64, Encoding};
     use tokio::fs;
 
     log::info!("保存聊天图片，数据长度: {} bytes", image_data.len());
 
     // 解码Base64数据
-    let bytes = general_purpose::STANDARD
-        .decode(&image_data)
-        .map_err(|e| format!("Base64解码失败: {}", e))?;
+    let bytes = Base64::decode_vec(&image_data).map_err(|e| format!("Base64解码失败: {}", e))?;
 
     log::info!("解码后图片大小: {} bytes", bytes.len());
 
@@ -4996,7 +5237,7 @@ fn validate_outgoing_chat_payload(
     local_is_host: bool,
     local_messages: &[ChatServiceMessage],
 ) -> Result<(), String> {
-    let content_bytes = content.as_bytes().len();
+    let content_bytes = content.len();
     match message_type {
         MessageType::Text => {
             if content_bytes == 0 || content_bytes > MAX_TEXT_BYTES || image_data.is_some() {
@@ -5238,6 +5479,7 @@ pub async fn stop_p2p_chat(state: State<'_, AppState>) -> Result<(), String> {
 /// * `Ok(())` - 发送成功
 /// * `Err(String)` - 错误信息
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn send_p2p_chat_message(
     player_id: String,
     player_name: String,
@@ -5327,7 +5569,7 @@ pub async fn send_p2p_chat_message(
     log::info!(
         "📤 [ChatService] 向 {} 个已授权玩家发送 {} 字节消息",
         authoritative_peers.len(),
-        content.as_bytes().len()
+        content.len()
     );
 
     let total = authoritative_peers.len();
@@ -5463,7 +5705,7 @@ fn is_safe_remote_chat_message(
     {
         return false;
     }
-    let content_bytes = message.content.as_bytes().len();
+    let content_bytes = message.content.len();
     let shape_is_valid = match message.message_type {
         MessageType::Text => {
             content_bytes > 0 && content_bytes <= MAX_TEXT_BYTES && message.image_data.is_none()
@@ -5707,8 +5949,8 @@ pub async fn open_screen_viewer_window(
     // 构建URL，包含查询参数
     let url = format!(
         "index.html?screen-viewer=true&shareId={}&playerName={}",
-        urlencoding::encode(&share_id),
-        urlencoding::encode(&player_name)
+        percent_encoding::utf8_percent_encode(&share_id, percent_encoding::NON_ALPHANUMERIC),
+        percent_encoding::utf8_percent_encode(&player_name, percent_encoding::NON_ALPHANUMERIC)
     );
 
     // 创建新窗口
@@ -5937,7 +6179,7 @@ pub async fn danmaku_cursor_pos(app: tauri::AppHandle) -> Result<Option<(f64, f6
 /// 保存弹幕图片（data URL）到系统下载文件夹，返回保存的完整路径。
 #[tauri::command]
 pub async fn save_danmaku_image(data_url: String) -> Result<String, String> {
-    use base64::{engine::general_purpose::STANDARD, Engine};
+    use base64ct::{Base64, Encoding};
 
     // 解析 data URL：data:image/<ext>;base64,<payload>
     let (meta, payload) = data_url
@@ -5952,9 +6194,7 @@ pub async fn save_danmaku_image(data_url: String) -> Result<String, String> {
     } else {
         "jpg"
     };
-    let bytes = STANDARD
-        .decode(payload.trim())
-        .map_err(|e| format!("图片解码失败: {}", e))?;
+    let bytes = Base64::decode_vec(payload.trim()).map_err(|e| format!("图片解码失败: {}", e))?;
 
     let dir = dirs::download_dir()
         .or_else(dirs::picture_dir)
@@ -6124,6 +6364,7 @@ pub async fn read_log_file() -> Result<String, String> {
 /// * `remember_window_position` - 是否记住窗口位置
 /// * `enable_gpu_rendering` - 是否启用 GPU 渲染
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn save_settings(
     language: Option<String>,
     auto_startup: bool,
@@ -6764,6 +7005,7 @@ pub async fn restart_app_with_gpu_settings(
 /// * `Ok(())` - 保存成功
 /// * `Err(String)` - 错误信息
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn save_exit_node_advanced_config(
     enable_socks5: Option<bool>,
     socks5_port: Option<u16>,

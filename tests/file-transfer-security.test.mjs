@@ -4,9 +4,9 @@ import test from 'node:test';
 
 const rustServer = fs.readFileSync(new URL('../src-tauri/src/modules/file_transfer.rs', import.meta.url), 'utf8');
 const rustCommands = fs.readFileSync(new URL('../src-tauri/src/modules/tauri_commands.rs', import.meta.url), 'utf8');
-const androidServer = fs.readFileSync(new URL('../MCTier-Android/app/src/main/java/top/pmh13/mctier/network/FileShareHttpServer.kt', import.meta.url), 'utf8');
-const androidClient = fs.readFileSync(new URL('../MCTier-Android/app/src/main/java/top/pmh13/mctier/network/RemoteFileClient.kt', import.meta.url), 'utf8');
-const androidRepository = fs.readFileSync(new URL('../MCTier-Android/app/src/main/java/top/pmh13/mctier/MctierRepository.kt', import.meta.url), 'utf8');
+const androidServer = fs.readFileSync(new URL('../android/app/src/main/java/top/pmh13/mctier/network/FileShareHttpServer.kt', import.meta.url), 'utf8');
+const androidClient = fs.readFileSync(new URL('../android/app/src/main/java/top/pmh13/mctier/network/RemoteFileClient.kt', import.meta.url), 'utf8');
+const androidRepository = fs.readFileSync(new URL('../android/app/src/main/java/top/pmh13/mctier/MctierRepository.kt', import.meta.url), 'utf8');
 const fileShareManager = fs.readFileSync(new URL('../src/components/FileShareManager/FileShareManagerNew.tsx', import.meta.url), 'utf8');
 const tauriConfig = fs.readFileSync(new URL('../src-tauri/tauri.conf.json', import.meta.url), 'utf8');
 

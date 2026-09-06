@@ -87,7 +87,7 @@ MCTier 自定义源码可得（Source-Available）非商业许可
   授予使用者的任何权利，包括但不限于对这些组件进行商业使用、修改、
   逆向工程调试以及再分发的权利；
 - 使用者依法享有上述许可证所赋予的全部权利，并可自行替换 EasyTier 等动态库版本
-  （替换与重新构建说明见 `docs/android/rebuild-with-modified-easytier.md`）。
+  （替换与重新构建说明见 `docs/rebuild-with-modified-easytier.md`）。
 
 EasyTier 版权与许可证声明：
 
@@ -247,7 +247,7 @@ For the avoidance of doubt:
   of those components;
 - Users retain all rights granted by those licenses, including the right to replace the
   EasyTier shared libraries with their own builds (see
-  `docs/android/rebuild-with-modified-easytier.md`).
+  `docs/rebuild-with-modified-easytier.md`).
 
 EasyTier copyright and license notice:
 

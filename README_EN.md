@@ -174,7 +174,7 @@ Download the latest build from [GitHub Releases](https://github.com/pmh1314520/M
 - Windows Installer: download `MCTier_x.y.z_x64-setup.exe` and double-click to install.
 - Windows Portable: download `MCTier.exe` and run it directly.
 - Android: download `MCTier-Android.apk` and install it on your phone.
-- Linux (Debian family): see [MCTier-Linux/README.md](MCTier-Linux/README.md) for build and packaging steps. The app itself runs as a normal user and only needs `cap_net_admin` granted once to `easytier-core`; voice, screen sharing and remote control are not yet usable on stock Debian — see the per-feature status matrix in that directory.
+- Linux (Debian family): see [linux/README.md](linux/README.md) for build and packaging steps. The app itself runs as a normal user and only needs `cap_net_admin` granted once to `easytier-core`; voice, screen sharing and remote control are not yet usable on stock Debian — see the per-feature status matrix in that directory.
 
 ### Create or Join a Lobby
 
@@ -263,13 +263,13 @@ Desktop release builds generate the NSIS installer only. This avoids processing 
 The Android source code is located at:
 
 ```text
-MCTier-Android/
+android/
 ```
 
 Debug or package Android:
 
 ```bash
-cd MCTier-Android
+cd android
 gradlew.bat assembleDebug
 ```
 
@@ -339,7 +339,7 @@ Related files:
 - [LICENSE-GPL-3.0.txt](LICENSE-GPL-3.0.txt) — full GPL-3.0 text (incorporated by reference into LGPL-3.0)
 - [patches/easytier-2.6.0-mctier-android.patch](patches/easytier-2.6.0-mctier-android.patch) — EasyTier modifications for Android
 - [patches/pnet_datalink-0.35.0-no-npcap.patch](patches/pnet_datalink-0.35.0-no-npcap.patch) — removes the static Npcap `Packet.dll` link dependency on Windows
-- [docs/android/rebuild-with-modified-easytier.md](docs/android/rebuild-with-modified-easytier.md) — rebuild the Android app with your own modified EasyTier
+- [docs/rebuild-with-modified-easytier.md](docs/rebuild-with-modified-easytier.md) — rebuild the Android app with your own modified EasyTier
 - [licenses/](licenses/) — full third-party license texts (LGPL-3.0, GPL-3.0, GPL-2.0, Apache-2.0, MIT, BSD-3-Clause, Wintun)
 
 `THIRD_PARTY_NOTICES.md` covers versions, SHA-256 hashes, licenses and modification status

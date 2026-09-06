@@ -173,7 +173,7 @@ MCTier 基于 EasyTier 与 WebRTC，用来把不同网络环境下的设备组�
 - Windows 安装包：下载 `MCTier_x.y.z_x64-setup.exe` 后双击安装。
 - Windows 便携版：下载 `MCTier.exe` 后直接运行。
 - Android：下载 `MCTier-Android.apk` 后在手机上安装。
-- Linux（Debian 家族）：构建与打包方式见 [MCTier-Linux/README.md](MCTier-Linux/README.md)。应用本体以普通用户运行，只需为 `easytier-core` 授予一次 `cap_net_admin` 能力；语音、屏幕共享与远程控制在标准 Debian 上暂不可用，逐项状态见该目录的状态矩阵。
+- Linux（Debian 家族）：构建与打包方式见 [linux/README.md](linux/README.md)。应用本体以普通用户运行，只需为 `easytier-core` 授予一次 `cap_net_admin` 能力；语音、屏幕共享与远程控制在标准 Debian 上暂不可用，逐项状态见该目录的状态矩阵。
 
 ### 创建或加入大厅
 
@@ -262,13 +262,13 @@ npm run tauri build -- --bundles nsis --ci
 Android 端源码位于：
 
 ```text
-MCTier-Android/
+android/
 ```
 
 调试或打包 Android：
 
 ```bash
-cd MCTier-Android
+cd android
 gradlew.bat assembleDebug
 ```
 
@@ -334,7 +334,7 @@ Source: https://github.com/EasyTier/EasyTier
 - [LICENSE-GPL-3.0.txt](LICENSE-GPL-3.0.txt) — GPL-3.0 全文（LGPL-3.0 以引用方式并入）
 - [patches/easytier-2.6.0-mctier-android.patch](patches/easytier-2.6.0-mctier-android.patch) — Android 端 EasyTier 修改补丁
 - [patches/pnet_datalink-0.35.0-no-npcap.patch](patches/pnet_datalink-0.35.0-no-npcap.patch) — 移除 Windows 端对 Npcap `Packet.dll` 的静态链接依赖
-- [docs/android/rebuild-with-modified-easytier.md](docs/android/rebuild-with-modified-easytier.md) — 用自行修改的 EasyTier 重新构建 Android 版
+- [docs/rebuild-with-modified-easytier.md](docs/rebuild-with-modified-easytier.md) — 用自行修改的 EasyTier 重新构建 Android 版
 - [licenses/](licenses/) — 各第三方许可证全文（LGPL-3.0、GPL-3.0、GPL-2.0、Apache-2.0、MIT、BSD-3-Clause、Wintun）
 
 `THIRD_PARTY_NOTICES.md` 覆盖 EasyTier、Wintun、WinDivert、

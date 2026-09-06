@@ -41,7 +41,7 @@ updates:
         update-types: ["version-update:semver-major"]
 
   - package-ecosystem: gradle
-    directory: "/MCTier-Android"
+    directory: "/android"
     schedule:
       interval: monthly
     open-pull-requests-limit: 2

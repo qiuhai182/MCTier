@@ -12,7 +12,7 @@
 - [ ] `npx tsc --noEmit`
 - [ ] `npm test`
 - [ ] `cd src-tauri && cargo check --lib --tests`
-- [ ] Android：`cd MCTier-Android && ./gradlew assembleDebug`（若改动 Android 端）
+- [ ] Android：`cd android && ./gradlew assembleDebug`（若改动 Android 端）
 
 ## 第三方组件
 

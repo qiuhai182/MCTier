@@ -13,6 +13,7 @@ export interface SharedFolder {
   password?: string;
   expire_time?: number; // Unix timestamp
   compress_before_send?: boolean; // 是否启用"先压后发"策略
+  allow_uploads?: boolean; // 是否允许远程节点上传文件
   owner_id: string;
   created_at: number;
 }
@@ -26,6 +27,7 @@ export interface SharedFolderSummary {
   has_password: boolean;
   expire_time?: number;
   compress_before_send?: boolean;
+  allow_uploads?: boolean;
   owner_id: string;
   created_at: number;
 }
@@ -78,4 +80,41 @@ export interface RemoteShare {
   share: SharedFolderSummary;
   owner_name: string;
   owner_ip: string;
+}
+
+/**
+ * 文本分享
+ */
+export interface TextShare {
+  id: string;
+  text: string;
+  created_at: number;
+  owner_id: string;
+}
+
+/**
+ * 上传任务
+ */
+export interface UploadTask {
+  id: string;
+  share_id: string;
+  file_path: string;
+  file_name: string;
+  file_size: number;
+  uploaded: number;
+  progress: number;
+  speed: number;
+  status: 'pending' | 'uploading' | 'completed' | 'failed' | 'cancelled';
+  error?: string;
+  peer_ip: string;
+  started_at?: number;
+  completed_at?: number;
+}
+
+/**
+ * 上传响应
+ */
+export interface UploadResponse {
+  success: boolean;
+  uploaded_files: string[];
 }

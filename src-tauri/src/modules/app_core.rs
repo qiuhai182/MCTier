@@ -207,7 +207,7 @@ impl AppCore {
             .lobby_manager
             .lock()
             .await
-            .leave_lobby(&*network_service_ref)
+            .leave_lobby(&network_service_ref)
             .await
         {
             Ok(_) => info!("已退出大厅"),

@@ -7,21 +7,21 @@ import { fileURLToPath } from 'node:url';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const read = (relativePath) => fs.readFileSync(path.resolve(here, '..', relativePath), 'utf8');
 
-const manifest = read('MCTier-Android/app/src/main/AndroidManifest.xml');
-const networkSecurity = read('MCTier-Android/app/src/main/res/xml/network_security_config.xml');
-const mainActivity = read('MCTier-Android/app/src/main/java/top/pmh13/mctier/MainActivity.kt');
-const mctierApp = read('MCTier-Android/app/src/main/java/top/pmh13/mctier/ui/MctierApp.kt');
-const inviteCodec = read('MCTier-Android/app/src/main/java/top/pmh13/mctier/network/LobbyInviteCodec.kt');
-const vpnService = read('MCTier-Android/app/src/main/java/com/easytier/jni/EasyTierVpnService.kt');
-const voiceService = read('MCTier-Android/app/src/main/java/top/pmh13/mctier/service/VoiceForegroundService.kt');
-const repository = read('MCTier-Android/app/src/main/java/top/pmh13/mctier/MctierRepository.kt');
-const secureStore = read('MCTier-Android/app/src/main/java/top/pmh13/mctier/SecurePreferenceStore.kt');
-const models = read('MCTier-Android/app/src/main/java/top/pmh13/mctier/data/Models.kt');
-const chatServer = read('MCTier-Android/app/src/main/java/top/pmh13/mctier/network/ChatHttpServer.kt');
-const chatClient = read('MCTier-Android/app/src/main/java/top/pmh13/mctier/network/ChatP2PClient.kt');
-const chatAuth = read('MCTier-Android/app/src/main/java/top/pmh13/mctier/network/ChatAuth.kt');
-const lanCors = read('MCTier-Android/app/src/main/java/top/pmh13/mctier/network/LanCors.kt');
-const signalingClient = read('MCTier-Android/app/src/main/java/top/pmh13/mctier/network/SignalingClient.kt');
+const manifest = read('android/app/src/main/AndroidManifest.xml');
+const networkSecurity = read('android/app/src/main/res/xml/network_security_config.xml');
+const mainActivity = read('android/app/src/main/java/top/pmh13/mctier/MainActivity.kt');
+const mctierApp = read('android/app/src/main/java/top/pmh13/mctier/ui/MctierApp.kt');
+const inviteCodec = read('android/app/src/main/java/top/pmh13/mctier/network/LobbyInviteCodec.kt');
+const vpnService = read('android/app/src/main/java/com/easytier/jni/EasyTierVpnService.kt');
+const voiceService = read('android/app/src/main/java/top/pmh13/mctier/service/VoiceForegroundService.kt');
+const repository = read('android/app/src/main/java/top/pmh13/mctier/MctierRepository.kt');
+const secureStore = read('android/app/src/main/java/top/pmh13/mctier/SecurePreferenceStore.kt');
+const models = read('android/app/src/main/java/top/pmh13/mctier/data/Models.kt');
+const chatServer = read('android/app/src/main/java/top/pmh13/mctier/network/ChatHttpServer.kt');
+const chatClient = read('android/app/src/main/java/top/pmh13/mctier/network/ChatP2PClient.kt');
+const chatAuth = read('android/app/src/main/java/top/pmh13/mctier/network/ChatAuth.kt');
+const lanCors = read('android/app/src/main/java/top/pmh13/mctier/network/LanCors.kt');
+const signalingClient = read('android/app/src/main/java/top/pmh13/mctier/network/SignalingClient.kt');
 
 test('Android manifest keeps non-entry components private and disables global cleartext', () => {
   assert.match(manifest, /android:usesCleartextTraffic="false"/);

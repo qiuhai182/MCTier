@@ -6,7 +6,7 @@
 # .desktop 也指向它，保证从菜单点开和从终端跑的行为一致。
 #
 # 用法：
-#   ./MCTier-Linux/scripts/run-linux.sh [传给 MCTier 的参数...]
+#   ./linux/scripts/run-linux.sh [传给 MCTier 的参数...]
 #
 # 环境变量：
 #   MCTIER_BIN   指定主程序路径（默认在常见安装位置和构建产物目录里找）
@@ -41,7 +41,7 @@ find_binary() {
   return 1
 }
 
-BIN="$(find_binary)" || fail "找不到 MCTier 主程序。请先执行 MCTier-Linux/scripts/build.sh，或用 MCTIER_BIN 指定路径。"
+BIN="$(find_binary)" || fail "找不到 MCTier 主程序。请先执行 linux/scripts/build.sh，或用 MCTIER_BIN 指定路径。"
 
 # ---- 输入法 ---------------------------------------------------------------
 # fcitx5 / ibus 的 GTK IM 模块在 WebKitGTK 的 <input type="password"> 上会吞掉按键，
@@ -64,7 +64,7 @@ fi
 # 自建的 WebKitGTK（开了 ENABLE_WEB_RTC）放在这个目录时自动优先加载，
 # 只对本进程生效，不影响系统里其他用 WebKit 的程序。
 # 背景：Debian 官方的 webkit2gtk 编译期没开 WebRTC，语音/屏幕共享/远程控制无法启动，
-# 详见 MCTier-Linux/README.md 的"已知限制"。
+# 详见 linux/README.md 的"已知限制"。
 for webkit_dir in "${MCTIER_WEBKIT_LIB_DIR:-}" "$HOME/.local/lib/mctier-webkit" /opt/mctier/webkit/lib; do
   if [[ -n "$webkit_dir" && -d "$webkit_dir" ]]; then
     export LD_LIBRARY_PATH="${webkit_dir}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"

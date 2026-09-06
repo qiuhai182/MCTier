@@ -10,6 +10,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use percent_encoding;
+
 use super::http_cors::lan_cors_layer;
 use axum::{
     body::Body,
@@ -19,11 +21,10 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use dashmap::DashMap;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use tokio::fs::File;
-use tokio::io::{AsyncReadExt, AsyncSeekExt};
+use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore};
 use uuid::Uuid;
 use zip::write::SimpleFileOptions;
@@ -40,6 +41,10 @@ const MAX_PASSWORD_FAILURES: usize = 10;
 const MAX_PASSWORD_FAILURE_KEYS: usize = 4096;
 const PASSWORD_FAILURE_WINDOW: Duration = Duration::from_secs(30);
 pub const LOBBY_TOKEN_HEADER: &str = "x-mctier-lobby-token";
+const MAX_UPLOAD_BYTES: usize = 2 * 1024 * 1024 * 1024;
+const MAX_TEXT_SHARE_BYTES: usize = 256 * 1024;
+const MAX_TEXT_SHARES: usize = 1000;
+const TEXT_SHARE_TTL: Duration = Duration::from_secs(3600);
 
 /// 共享文件夹信息
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -50,6 +55,7 @@ pub struct SharedFolder {
     pub password: Option<String>,
     pub expire_time: Option<u64>,           // Unix timestamp
     pub compress_before_send: Option<bool>, // 是否启用"先压后发"策略
+    pub allow_uploads: Option<bool>,        // 是否允许远程节点上传文件
     pub owner_id: String,
     pub created_at: u64,
     #[serde(skip)]
@@ -67,6 +73,8 @@ pub struct SharedFolderSummary {
     pub has_password: bool,
     pub expire_time: Option<u64>,
     pub compress_before_send: Option<bool>,
+    #[serde(default)]
+    pub allow_uploads: bool,
     pub owner_id: String,
     pub created_at: u64,
 }
@@ -82,6 +90,7 @@ impl From<&SharedFolder> for SharedFolderSummary {
                 .is_some_and(|password| !password.trim().is_empty()),
             expire_time: share.expire_time,
             compress_before_send: share.compress_before_send,
+            allow_uploads: share.allow_uploads.unwrap_or(false),
             owner_id: share.owner_id.clone(),
             created_at: share.created_at,
         }
@@ -130,18 +139,54 @@ pub struct BatchDownloadRequest {
     pub file_paths: Vec<String>,
 }
 
+/// 文本分享
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TextShare {
+    pub id: String,
+    pub text: String,
+    pub created_at: u64,
+    pub owner_id: String,
+}
+
+/// 创建文本分享请求
+#[derive(Debug, Deserialize)]
+pub struct CreateTextShareRequest {
+    pub text: String,
+}
+
+/// 创建目录请求
+#[derive(Debug, Deserialize)]
+pub struct CreateDirectoryRequest {
+    pub path: String,
+}
+
+/// 重命名请求
+#[derive(Debug, Deserialize)]
+pub struct RenameRequest {
+    pub old_path: String,
+    pub new_path: String,
+}
+
+/// 删除请求
+#[derive(Debug, Deserialize)]
+pub struct DeleteRequest {
+    pub path: String,
+}
+
 /// 文件传输服务状态
 pub struct FileTransferService {
     /// 本地共享的文件夹
-    shared_folders: Arc<DashMap<String, SharedFolder>>,
+    shared_folders: Arc<RwLock<HashMap<String, SharedFolder>>>,
     /// 虚拟IP地址
     virtual_ip: Arc<RwLock<Option<String>>>,
     /// 服务器句柄
     server_handle: Arc<RwLock<Option<tokio::task::JoinHandle<()>>>>,
     /// 过期定时器句柄
-    expiry_timers: Arc<DashMap<String, ExpiryTimer>>,
+    expiry_timers: Arc<RwLock<HashMap<String, ExpiryTimer>>>,
     /// 信令服务器签发的当前大厅凭据；成员变化时会轮换。
     lobby_token: Arc<RwLock<Option<String>>>,
+    /// 临时文本分享
+    text_shares: Arc<RwLock<HashMap<String, TextShare>>>,
 }
 
 struct ExpiryTimer {
@@ -150,14 +195,21 @@ struct ExpiryTimer {
     handle: tokio::task::JoinHandle<()>,
 }
 
+impl Default for FileTransferService {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl FileTransferService {
     pub fn new() -> Self {
         Self {
-            shared_folders: Arc::new(DashMap::new()),
+            shared_folders: Arc::new(RwLock::new(HashMap::new())),
             virtual_ip: Arc::new(RwLock::new(None)),
             server_handle: Arc::new(RwLock::new(None)),
-            expiry_timers: Arc::new(DashMap::new()),
+            expiry_timers: Arc::new(RwLock::new(HashMap::new())),
             lobby_token: Arc::new(RwLock::new(None)),
+            text_shares: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -240,9 +292,31 @@ impl FileTransferService {
             .route("/api/shares/:share_id/verify", post(verify_password))
             .route(
                 "/api/shares/:share_id/download/*file_path",
-                get(download_file),
+                get(download_file).head(head_file),
             )
             .route("/api/shares/:share_id/batch-download", post(batch_download))
+            // 文件上传（multipart）
+            .route(
+                "/api/shares/:share_id/upload",
+                post(upload_file).layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES)),
+            )
+            // 断点续传上传（PUT）
+            .route(
+                "/api/shares/:share_id/upload/*file_path",
+                axum::routing::put(upload_file_put).layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES)),
+            )
+            // 文件操作
+            .route("/api/shares/:share_id/mkdir", post(create_directory))
+            .route("/api/shares/:share_id/rename", post(rename_item))
+            .route("/api/shares/:share_id/delete", post(delete_item))
+            // 文本分享
+            .route("/api/shares/:share_id/text", post(create_text_share))
+            .route("/api/shares/:share_id/text/:text_id", get(get_text_share))
+            // WebDAV
+            .route(
+                "/api/shares/:share_id/dav/*path",
+                axum::routing::any(webdav_handler),
+            )
             .layer(DefaultBodyLimit::max(MAX_JSON_BODY_BYTES))
             .layer(lan_cors_layer())
             .with_state(AppState {
@@ -250,11 +324,12 @@ impl FileTransferService {
                 batch_slots: Arc::new(Semaphore::new(1)),
                 password_failures: Arc::new(Mutex::new(HashMap::new())),
                 lobby_token: self.lobby_token.clone(),
+                text_shares: self.text_shares.clone(),
             });
 
         log::info!("🚀 正在启动HTTP文件服务器...");
         log::info!("📍 监听地址: http://{}", addr);
-        log::debug!("📂 共享文件夹数量: {}", shared_folders.len());
+        log::debug!("📂 共享文件夹数量: {}", shared_folders.read().len());
 
         // 尝试绑定端口
         let listener = match tokio::net::TcpListener::bind(addr).await {
@@ -342,10 +417,12 @@ impl FileTransferService {
         let share_id = share.id.clone();
         let expiry_token = Uuid::new_v4();
         share.expiry_token = expiry_token;
-        if let Some((_, old_timer)) = self.expiry_timers.remove(&share_id) {
+        if let Some(old_timer) = self.expiry_timers.write().remove(&share_id) {
             old_timer.handle.abort();
         }
-        self.shared_folders.insert(share_id.clone(), share.clone());
+        self.shared_folders
+            .write()
+            .insert(share_id.clone(), share.clone());
         log::debug!("📁 添加共享: {} ({})", share.name, share_id);
 
         // 如果设置了过期时间,创建定时器
@@ -369,21 +446,36 @@ impl FileTransferService {
 
                     // Do not let a stale timer remove a replacement share, even
                     // when it reuses the same ID and deadline.
-                    if shared_folders
-                        .remove_if(&share_id_clone, |_, current| {
-                            current.expiry_token == token && current.expire_time == Some(deadline)
-                        })
-                        .is_some()
-                    {
+                    let removed = {
+                        let mut shared = shared_folders.write();
+                        if shared
+                            .get(&share_id_clone)
+                            .map(|current| {
+                                current.expiry_token == token
+                                    && current.expire_time == Some(deadline)
+                            })
+                            .unwrap_or(false)
+                        {
+                            shared.remove(&share_id_clone)
+                        } else {
+                            None
+                        }
+                    };
+                    if removed.is_some() {
                         log::info!("⏰ 共享已过期并自动删除: {}", share_id_clone);
                     }
 
-                    expiry_timers.remove_if(&share_id_clone, |_, timer| {
-                        timer.deadline == deadline && timer.token == token
-                    });
+                    let mut timers = expiry_timers.write();
+                    if timers
+                        .get(&share_id_clone)
+                        .map(|timer| timer.deadline == deadline && timer.token == token)
+                        .unwrap_or(false)
+                    {
+                        timers.remove(&share_id_clone);
+                    }
                 });
 
-                self.expiry_timers.insert(
+                self.expiry_timers.write().insert(
                     share_id.clone(),
                     ExpiryTimer {
                         deadline: expire_time,
@@ -399,18 +491,18 @@ impl FileTransferService {
 
     /// 删除共享文件夹
     pub fn remove_share(&self, share_id: &str) -> Result<(), String> {
-        let (_, share) = self
+        let share = self
             .shared_folders
+            .write()
             .remove(share_id)
             .ok_or_else(|| "共享不存在".to_string())?;
 
         // 取消过期定时器
-        if let Some((_, timer)) = self
-            .expiry_timers
-            .remove_if(share_id, |_, timer| timer.token == share.expiry_token)
-        {
-            timer.handle.abort();
-            log::debug!("⏰ 取消共享 {} 的过期定时器", share_id);
+        if let Some(timer) = self.expiry_timers.write().remove(share_id) {
+            if timer.token == share.expiry_token {
+                timer.handle.abort();
+                log::debug!("⏰ 取消共享 {} 的过期定时器", share_id);
+            }
         }
 
         log::debug!("🗑️ 删除共享: {}", share_id);
@@ -424,9 +516,10 @@ impl FileTransferService {
             .unwrap_or_default()
             .as_secs();
         self.shared_folders
-            .iter()
-            .filter(|entry| !is_expired(entry.value().expire_time, now))
-            .map(|entry| entry.value().clone())
+            .read()
+            .values()
+            .filter(|share| !is_expired(share.expire_time, now))
+            .cloned()
             .collect()
     }
 
@@ -437,36 +530,82 @@ impl FileTransferService {
             .unwrap_or_default()
             .as_secs();
 
-        let expired: Vec<(String, Uuid)> = self
-            .shared_folders
-            .iter()
-            .filter(|entry| {
-                if let Some(expire_time) = entry.value().expire_time {
-                    expire_time <= now
-                } else {
-                    false
-                }
-            })
-            .map(|entry| (entry.key().clone(), entry.value().expiry_token))
-            .collect();
+        let expired: Vec<(String, Uuid)> = {
+            let shared = self.shared_folders.read();
+            shared
+                .iter()
+                .filter_map(|(key, share)| {
+                    if let Some(expire_time) = share.expire_time {
+                        if expire_time <= now {
+                            Some((key.clone(), share.expiry_token))
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        };
 
         for (share_id, token) in expired {
-            if self
-                .shared_folders
-                .remove_if(&share_id, |_, share| {
-                    share.expiry_token == token && is_expired(share.expire_time, now)
-                })
-                .is_none()
-            {
+            // 双重检查 token 匹配，防止并发下误删
+            let removed = {
+                let mut shared = self.shared_folders.write();
+                if shared
+                    .get(&share_id)
+                    .map(|s| s.expiry_token == token && is_expired(s.expire_time, now))
+                    .unwrap_or(false)
+                {
+                    shared.remove(&share_id)
+                } else {
+                    None
+                }
+            };
+            if removed.is_none() {
                 continue;
             }
-            if let Some((_, timer)) = self
-                .expiry_timers
-                .remove_if(&share_id, |_, timer| timer.token == token)
-            {
-                timer.handle.abort();
+            if let Some(timer) = self.expiry_timers.write().remove(&share_id) {
+                if timer.token == token {
+                    timer.handle.abort();
+                }
             }
             log::debug!("⏰ 清理过期共享: {}", share_id);
+        }
+    }
+
+    /// 清理过期的文本分享
+    pub fn cleanup_text_shares(&self) {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let expired: Vec<String> = {
+            let shares = self.text_shares.read();
+            shares
+                .iter()
+                .filter(|(_, s)| now.saturating_sub(s.created_at) > TEXT_SHARE_TTL.as_secs())
+                .map(|(id, _)| id.clone())
+                .collect()
+        };
+        for id in expired {
+            self.text_shares.write().remove(&id);
+            log::debug!("📝 清理过期文本分享: {}", id);
+        }
+        // 超过上限时移除最旧的
+        if self.text_shares.read().len() > MAX_TEXT_SHARES {
+            let mut entries: Vec<(String, u64)> = {
+                let shares = self.text_shares.read();
+                shares
+                    .iter()
+                    .map(|(id, s)| (id.clone(), s.created_at))
+                    .collect()
+            };
+            entries.sort_by_key(|(_, t)| *t);
+            let to_remove = entries.len().saturating_sub(MAX_TEXT_SHARES);
+            for (id, _) in entries.into_iter().take(to_remove) {
+                self.text_shares.write().remove(&id);
+            }
         }
     }
 }
@@ -474,10 +613,13 @@ impl FileTransferService {
 /// Axum 应用状态
 #[derive(Clone)]
 struct AppState {
-    shared_folders: Arc<DashMap<String, SharedFolder>>,
+    shared_folders: Arc<RwLock<HashMap<String, SharedFolder>>>,
     batch_slots: Arc<Semaphore>,
+    // clippy: 嵌套泛型组合表达限流失败记录，单独提取类型别名收益有限
+    #[allow(clippy::type_complexity)]
     password_failures: Arc<Mutex<HashMap<(String, IpAddr), VecDeque<Instant>>>>,
     lobby_token: Arc<RwLock<Option<String>>>,
+    text_shares: Arc<RwLock<HashMap<String, TextShare>>>,
 }
 
 fn authenticate_lobby(state: &AppState, headers: &HeaderMap) -> Result<(), StatusCode> {
@@ -774,6 +916,71 @@ fn content_disposition(path: &Path) -> String {
     )
 }
 
+/// 根据文件扩展名返回 MIME 类型
+fn mime_type_for_path(path: &Path) -> &'static str {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase());
+    match ext.as_deref() {
+        Some("html" | "htm") => "text/html; charset=utf-8",
+        Some("css") => "text/css; charset=utf-8",
+        Some("js" | "mjs") => "application/javascript; charset=utf-8",
+        Some("json") => "application/json; charset=utf-8",
+        Some("xml") => "application/xml; charset=utf-8",
+        Some("txt" | "md" | "log" | "csv" | "ini" | "conf" | "cfg") => "text/plain; charset=utf-8",
+        Some("png") => "image/png",
+        Some("jpg" | "jpeg") => "image/jpeg",
+        Some("gif") => "image/gif",
+        Some("svg") => "image/svg+xml",
+        Some("webp") => "image/webp",
+        Some("ico") => "image/x-icon",
+        Some("bmp") => "image/bmp",
+        Some("tiff" | "tif") => "image/tiff",
+        Some("pdf") => "application/pdf",
+        Some("zip") => "application/zip",
+        Some("gz" | "gzip") => "application/gzip",
+        Some("tar") => "application/x-tar",
+        Some("7z") => "application/x-7z-compressed",
+        Some("rar") => "application/vnd.rar",
+        Some("bz" | "bz2") => "application/x-bzip2",
+        Some("mp3") => "audio/mpeg",
+        Some("wav") => "audio/wav",
+        Some("flac") => "audio/flac",
+        Some("ogg") => "audio/ogg",
+        Some("m4a" | "aac") => "audio/mp4",
+        Some("mp4") => "video/mp4",
+        Some("webm") => "video/webm",
+        Some("avi") => "video/x-msvideo",
+        Some("mkv") => "video/x-matroska",
+        Some("mov") => "video/quicktime",
+        Some("wmv") => "video/x-ms-wmv",
+        Some("doc") => "application/msword",
+        Some("docx") => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        Some("xls") => "application/vnd.ms-excel",
+        Some("xlsx") => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        Some("ppt") => "application/vnd.ms-powerpoint",
+        Some("pptx") => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        Some("apk") => "application/vnd.android.package-archive",
+        Some("jar") => "application/java-archive",
+        Some("wasm") => "application/wasm",
+        Some("torrent") => "application/x-bittorrent",
+        _ => "application/octet-stream",
+    }
+}
+
+/// 基于文件大小和修改时间生成 ETag
+fn generate_etag(size: u64, modified: u64) -> String {
+    format!("\"{}-{}\"", size, modified)
+}
+
+/// 格式化 HTTP 日期（RFC 7231 IMF-fixdate）
+fn format_http_date(secs: u64) -> String {
+    use chrono::{DateTime, Utc};
+    let dt = DateTime::<Utc>::from_timestamp(secs as i64, 0).unwrap_or_default();
+    dt.format("%a, %d %b %Y %H:%M:%S GMT").to_string()
+}
+
 /// 获取共享列表
 async fn list_shares(
     State(state): State<AppState>,
@@ -786,9 +993,10 @@ async fn list_shares(
         .as_secs();
     let shares: Vec<SharedFolderSummary> = state
         .shared_folders
-        .iter()
-        .filter(|entry| !is_expired(entry.value().expire_time, now))
-        .map(|entry| SharedFolderSummary::from(entry.value()))
+        .read()
+        .values()
+        .filter(|share| !is_expired(share.expire_time, now))
+        .map(SharedFolderSummary::from)
         .collect();
 
     log::debug!("📋 收到获取共享列表请求，返回 {} 个共享", shares.len());
@@ -809,6 +1017,7 @@ mod share_list_response_tests {
             password: Some("secret-password".to_string()),
             expire_time: Some(1_900_000_000),
             compress_before_send: Some(true),
+            allow_uploads: Some(false),
             owner_id: "owner-1".to_string(),
             created_at: 1_800_000_000,
             expiry_token: Uuid::nil(),
@@ -859,8 +1068,9 @@ async fn list_files(
     // 获取共享信息
     let share = state
         .shared_folders
+        .read()
         .get(&share_id)
-        .map(|share| share.clone())
+        .cloned()
         .ok_or(StatusCode::NOT_FOUND)?;
 
     let now = SystemTime::now()
@@ -974,8 +1184,9 @@ async fn verify_password(
     authenticate_lobby(&state, &headers)?;
     let share = state
         .shared_folders
+        .read()
         .get(&share_id)
-        .map(|share| share.clone())
+        .cloned()
         .ok_or(StatusCode::NOT_FOUND)?;
 
     let now = SystemTime::now()
@@ -998,19 +1209,41 @@ async fn verify_password(
     }))
 }
 
-/// 下载文件（支持Range请求）
+/// 下载文件（支持Range请求、ETag、条件请求、MIME类型检测）
 async fn download_file(
     State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     AxumPath((share_id, file_path)): AxumPath<(String, String)>,
     headers: HeaderMap,
 ) -> Result<Response, StatusCode> {
-    authenticate_lobby(&state, &headers)?;
-    // 获取共享信息
+    serve_file(&state, &headers, peer, &share_id, &file_path, false).await
+}
+
+/// HEAD 请求：返回文件头信息但不发送文件内容
+async fn head_file(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    AxumPath((share_id, file_path)): AxumPath<(String, String)>,
+    headers: HeaderMap,
+) -> Result<Response, StatusCode> {
+    serve_file(&state, &headers, peer, &share_id, &file_path, true).await
+}
+
+/// 文件服务的核心逻辑，GET 和 HEAD 共用
+async fn serve_file(
+    state: &AppState,
+    headers: &HeaderMap,
+    peer: SocketAddr,
+    share_id: &str,
+    file_path: &str,
+    head_only: bool,
+) -> Result<Response, StatusCode> {
+    authenticate_lobby(state, headers)?;
     let share = state
         .shared_folders
-        .get(&share_id)
-        .map(|share| share.clone())
+        .read()
+        .get(share_id)
+        .cloned()
         .ok_or(StatusCode::NOT_FOUND)?;
 
     let now = SystemTime::now()
@@ -1022,11 +1255,11 @@ async fn download_file(
     }
 
     if !is_share_access_allowed(
-        &state,
-        &share_id,
+        state,
+        share_id,
         &share,
         peer,
-        share_password_header(&headers),
+        share_password_header(headers),
     )
     .await
     {
@@ -1034,16 +1267,11 @@ async fn download_file(
     }
 
     let base_path = PathBuf::from(&share.path);
-
-    // 安全检查：使用 safe_join 防止路径穿越
-    let full_path = match safe_existing_join(&base_path, &file_path) {
+    let full_path = match safe_existing_join(&base_path, file_path) {
         Some(p) => p,
         None => return Err(StatusCode::FORBIDDEN),
     };
 
-    // Re-check the leaf without following links immediately before opening it.
-    // The path was validated earlier, but a file can be replaced while a
-    // request is in flight.
     let metadata = tokio::fs::symlink_metadata(&full_path)
         .await
         .map_err(|error| {
@@ -1069,9 +1297,53 @@ async fn download_file(
         return Err(StatusCode::BAD_REQUEST);
     }
     let file_size = opened_metadata.len();
+    let modified = opened_metadata
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let etag = generate_etag(file_size, modified);
+    let content_type = mime_type_for_path(&full_path);
+    let last_modified = format_http_date(modified);
+
+    // 条件请求：If-None-Match（ETag 匹配则返回 304）
+    if let Some(inm) = headers.get(header::IF_NONE_MATCH) {
+        if let Ok(inm_str) = inm.to_str() {
+            if inm_str
+                .split(',')
+                .map(|t| t.trim())
+                .any(|t| t == etag || t == "*")
+            {
+                return Response::builder()
+                    .status(StatusCode::NOT_MODIFIED)
+                    .header(header::ETAG, &etag)
+                    .header(header::LAST_MODIFIED, &last_modified)
+                    .body(Body::empty())
+                    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR);
+            }
+        }
+    }
+
+    // 条件请求：If-Modified-Since
+    if let Some(ims) = headers.get(header::IF_MODIFIED_SINCE) {
+        if let Ok(ims_str) = ims.to_str() {
+            if let Ok(ims_time) = chrono::DateTime::parse_from_rfc2822(ims_str) {
+                let ims_secs = ims_time.timestamp() as u64;
+                if modified <= ims_secs {
+                    return Response::builder()
+                        .status(StatusCode::NOT_MODIFIED)
+                        .header(header::ETAG, &etag)
+                        .header(header::LAST_MODIFIED, &last_modified)
+                        .body(Body::empty())
+                        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR);
+                }
+            }
+        }
+    }
+
     let mut file = File::from_std(opened_file);
 
-    // 解析Range头
     let range = match headers.get(header::RANGE) {
         Some(value) => {
             let value = value
@@ -1092,18 +1364,22 @@ async fn download_file(
                     .body(Body::empty())
                     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR);
             };
-            // 范围请求
             let length = end - start + 1;
 
             file.seek(std::io::SeekFrom::Start(start))
                 .await
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-            let stream = create_file_stream(file, length);
+            let body = if head_only {
+                Body::empty()
+            } else {
+                let stream = create_file_stream(file, length);
+                Body::from_stream(stream)
+            };
 
             Response::builder()
                 .status(StatusCode::PARTIAL_CONTENT)
-                .header(header::CONTENT_TYPE, "application/octet-stream")
+                .header(header::CONTENT_TYPE, content_type)
                 .header(header::CONTENT_LENGTH, length)
                 .header(header::ACCEPT_RANGES, "bytes")
                 .header(
@@ -1111,20 +1387,28 @@ async fn download_file(
                     format!("bytes {}-{}/{}", start, end, file_size),
                 )
                 .header(header::CONTENT_DISPOSITION, content_disposition(&full_path))
-                .body(Body::from_stream(stream))
+                .header(header::ETAG, &etag)
+                .header(header::LAST_MODIFIED, &last_modified)
+                .body(body)
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
         }
         None => {
-            // 完整文件请求
-            let stream = create_file_stream(file, file_size);
+            let body = if head_only {
+                Body::empty()
+            } else {
+                let stream = create_file_stream(file, file_size);
+                Body::from_stream(stream)
+            };
 
             Response::builder()
                 .status(StatusCode::OK)
-                .header(header::CONTENT_TYPE, "application/octet-stream")
+                .header(header::CONTENT_TYPE, content_type)
                 .header(header::CONTENT_LENGTH, file_size)
                 .header(header::ACCEPT_RANGES, "bytes")
                 .header(header::CONTENT_DISPOSITION, content_disposition(&full_path))
-                .body(Body::from_stream(stream))
+                .header(header::ETAG, &etag)
+                .header(header::LAST_MODIFIED, &last_modified)
+                .body(body)
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
         }
     }
@@ -1226,28 +1510,39 @@ mod range_tests {
 
 /// 创建文件流
 fn create_file_stream(
-    mut file: File,
+    file: File,
     length: u64,
 ) -> impl futures_util::Stream<Item = Result<bytes::Bytes, std::io::Error>> {
-    async_stream::stream! {
-        let mut remaining = length;
-        let mut buffer = vec![0u8; CHUNK_SIZE];
+    use futures_util::stream::unfold;
 
-        while remaining > 0 {
-            let to_read = std::cmp::min(CHUNK_SIZE as u64, remaining) as usize;
-            match file.read(&mut buffer[..to_read]).await {
-                Ok(0) => break,
-                Ok(n) => {
-                    remaining -= n as u64;
-                    yield Ok(bytes::Bytes::copy_from_slice(&buffer[..n]));
-                }
-                Err(e) => {
-                    yield Err(e);
-                    break;
-                }
-            }
-        }
+    struct FileStreamState {
+        file: File,
+        remaining: u64,
+        buffer: Vec<u8>,
     }
+
+    unfold(
+        FileStreamState {
+            file,
+            remaining: length,
+            buffer: vec![0u8; CHUNK_SIZE],
+        },
+        |mut state| async move {
+            if state.remaining == 0 {
+                return None;
+            }
+            let to_read = std::cmp::min(CHUNK_SIZE as u64, state.remaining) as usize;
+            match state.file.read(&mut state.buffer[..to_read]).await {
+                Ok(0) => None,
+                Ok(n) => {
+                    state.remaining -= n as u64;
+                    let bytes = bytes::Bytes::copy_from_slice(&state.buffer[..n]);
+                    Some((Ok(bytes), state))
+                }
+                Err(e) => Some((Err(e), state)),
+            }
+        },
+    )
 }
 
 struct TempFileStreamGuard {
@@ -1273,34 +1568,46 @@ fn create_temp_file_stream(
     length: u64,
     permit: OwnedSemaphorePermit,
 ) -> impl futures_util::Stream<Item = Result<bytes::Bytes, std::io::Error>> {
+    use futures_util::stream::unfold;
+
+    struct TempFileStreamState {
+        guard: TempFileStreamGuard,
+        remaining: u64,
+        buffer: Vec<u8>,
+    }
+
     let guard = TempFileStreamGuard {
         file: Some(file),
         path,
         _permit: permit,
     };
-    async_stream::stream! {
-        let mut guard = guard;
-        let mut remaining = length;
-        let mut buffer = vec![0u8; CHUNK_SIZE];
-        while remaining > 0 {
-            let to_read = std::cmp::min(CHUNK_SIZE as u64, remaining) as usize;
-            let result = match guard.file.as_mut() {
-                Some(file) => file.read(&mut buffer[..to_read]).await,
-                None => break,
+
+    unfold(
+        TempFileStreamState {
+            guard,
+            remaining: length,
+            buffer: vec![0u8; CHUNK_SIZE],
+        },
+        |mut state| async move {
+            if state.remaining == 0 {
+                return None;
+            }
+            let to_read = std::cmp::min(CHUNK_SIZE as u64, state.remaining) as usize;
+            let result = match state.guard.file.as_mut() {
+                Some(file) => file.read(&mut state.buffer[..to_read]).await,
+                None => return None,
             };
             match result {
-                Ok(0) => break,
+                Ok(0) => None,
                 Ok(read) => {
-                    remaining -= read as u64;
-                    yield Ok(bytes::Bytes::copy_from_slice(&buffer[..read]));
+                    state.remaining -= read as u64;
+                    let bytes = bytes::Bytes::copy_from_slice(&state.buffer[..read]);
+                    Some((Ok(bytes), state))
                 }
-                Err(error) => {
-                    yield Err(error);
-                    break;
-                }
+                Err(error) => Some((Err(error), state)),
             }
-        }
-    }
+        },
+    )
 }
 
 struct TempPathCleanup {
@@ -1340,11 +1647,15 @@ impl Drop for PreparedBatchZip {
 }
 
 fn ensure_share_current(
-    shared_folders: &DashMap<String, SharedFolder>,
+    shared_folders: &RwLock<HashMap<String, SharedFolder>>,
     share_id: &str,
     share_token: Uuid,
 ) -> Result<(), StatusCode> {
-    let share = shared_folders.get(share_id).ok_or(StatusCode::GONE)?;
+    let share = shared_folders
+        .read()
+        .get(share_id)
+        .cloned()
+        .ok_or(StatusCode::GONE)?;
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -1357,7 +1668,7 @@ fn ensure_share_current(
 
 struct ShareValidityReader<R> {
     inner: R,
-    shared_folders: Arc<DashMap<String, SharedFolder>>,
+    shared_folders: Arc<RwLock<HashMap<String, SharedFolder>>>,
     share_id: String,
     share_token: Uuid,
 }
@@ -1382,10 +1693,7 @@ impl<W: std::io::Write> std::io::Write for SizeLimitedWriter<W> {
     fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
         let available = self.limit.saturating_sub(self.position);
         if buffer.len() as u64 > available {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                ZIP_OUTPUT_LIMIT_ERROR,
-            ));
+            return Err(std::io::Error::other(ZIP_OUTPUT_LIMIT_ERROR));
         }
 
         let written = self.inner.write(buffer)?;
@@ -1403,10 +1711,7 @@ impl<W: std::io::Seek> std::io::Seek for SizeLimitedWriter<W> {
     fn seek(&mut self, position: std::io::SeekFrom) -> std::io::Result<u64> {
         let position = self.inner.seek(position)?;
         if position > self.limit {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                ZIP_OUTPUT_LIMIT_ERROR,
-            ));
+            return Err(std::io::Error::other(ZIP_OUTPUT_LIMIT_ERROR));
         }
         self.position = position;
         Ok(position)
@@ -1424,7 +1729,7 @@ impl Drop for TempPathCleanup {
 fn build_batch_zip(
     base_path: PathBuf,
     file_paths: Vec<String>,
-    shared_folders: Arc<DashMap<String, SharedFolder>>,
+    shared_folders: Arc<RwLock<HashMap<String, SharedFolder>>>,
     share_id: String,
     share_token: Uuid,
     permit: OwnedSemaphorePermit,
@@ -1569,8 +1874,9 @@ async fn batch_download(
     // 获取共享信息
     let share = state
         .shared_folders
+        .read()
         .get(&share_id)
-        .map(|share| share.clone())
+        .cloned()
         .ok_or_else(|| {
             log::error!("❌ 共享不存在: {}", share_id);
             StatusCode::NOT_FOUND
@@ -1616,7 +1922,9 @@ async fn batch_download(
 
     let current = state
         .shared_folders
+        .read()
         .get(&share_id)
+        .cloned()
         .ok_or(StatusCode::NOT_FOUND)?;
     if current.expiry_token != share_token
         || is_expired(
@@ -1648,7 +1956,9 @@ async fn batch_download(
 
     let current = state
         .shared_folders
+        .read()
         .get(&share_id)
+        .cloned()
         .ok_or(StatusCode::NOT_FOUND)?;
     let still_allowed = current.expiry_token == share_token
         && !is_expired(
@@ -1675,5 +1985,769 @@ async fn batch_download(
             format!("attachment; filename=\"{}\"", zip_filename),
         )
         .body(Body::from_stream(stream))
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+// ============================================================
+// 文件上传（POST multipart）
+// ============================================================
+
+/// 检查写权限：共享必须显式启用 allow_uploads 且密码验证通过
+async fn check_write_access(
+    state: &AppState,
+    share_id: &str,
+    share: &SharedFolder,
+    peer: SocketAddr,
+    headers: &HeaderMap,
+) -> Result<(), StatusCode> {
+    if !share.allow_uploads.unwrap_or(false) {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    if !is_share_access_allowed(state, share_id, share, peer, share_password_header(headers)).await
+    {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    Ok(())
+}
+
+/// Multipart 文件上传
+async fn upload_file(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    AxumPath(share_id): AxumPath<String>,
+    headers: HeaderMap,
+    mut multipart: axum::extract::Multipart,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    authenticate_lobby(&state, &headers)?;
+    let share = state
+        .shared_folders
+        .read()
+        .get(&share_id)
+        .cloned()
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    if is_expired(share.expire_time, now) {
+        return Err(StatusCode::GONE);
+    }
+    check_write_access(&state, &share_id, &share, peer, &headers).await?;
+
+    let base_path = PathBuf::from(&share.path);
+    let mut uploaded_files: Vec<String> = Vec::new();
+    let mut target_dir: String = String::new();
+
+    while let Some(mut field) = multipart
+        .next_field()
+        .await
+        .map_err(|_| StatusCode::BAD_REQUEST)?
+    {
+        let name = field.name().unwrap_or("").to_string();
+        let filename = field.file_name().map(|s| s.to_string());
+
+        if name == "path" || name == "dir" {
+            target_dir = field
+                .text()
+                .await
+                .map_err(|_| StatusCode::BAD_REQUEST)?
+                .trim()
+                .to_string();
+            continue;
+        }
+
+        let Some(filename) = filename else { continue };
+        if filename.contains('\0')
+            || filename.contains('/')
+            || filename.contains('\\')
+            || filename == ".."
+            || filename == "."
+            || filename.is_empty()
+        {
+            return Err(StatusCode::BAD_REQUEST);
+        }
+
+        let dir_path = if target_dir.is_empty() {
+            base_path.clone()
+        } else {
+            safe_join(&base_path, &target_dir).ok_or(StatusCode::FORBIDDEN)?
+        };
+
+        // 验证目标目录存在且不是链接
+        let dir_meta = tokio::fs::symlink_metadata(&dir_path)
+            .await
+            .map_err(|_| StatusCode::NOT_FOUND)?;
+        if is_link_or_reparse_point(&dir_meta) || !dir_meta.is_dir() {
+            return Err(StatusCode::BAD_REQUEST);
+        }
+
+        let file_path = dir_path.join(&filename);
+        // 确保最终路径仍在共享目录内
+        if !file_path.starts_with(&base_path) {
+            return Err(StatusCode::FORBIDDEN);
+        }
+
+        // 检查文件是否已存在且不是目录
+        if let Ok(meta) = tokio::fs::symlink_metadata(&file_path).await {
+            if is_link_or_reparse_point(&meta) {
+                return Err(StatusCode::FORBIDDEN);
+            }
+            if meta.is_dir() {
+                return Err(StatusCode::BAD_REQUEST);
+            }
+        }
+
+        let mut file = tokio::fs::File::create(&file_path)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+        let mut written: u64 = 0;
+        while let Some(chunk) = field.chunk().await.map_err(|_| StatusCode::BAD_REQUEST)? {
+            written += chunk.len() as u64;
+            if written > MAX_UPLOAD_BYTES as u64 {
+                // 清理不完整的上传
+                drop(file);
+                let _ = tokio::fs::remove_file(&file_path).await;
+                return Err(StatusCode::PAYLOAD_TOO_LARGE);
+            }
+            tokio::io::AsyncWriteExt::write_all(&mut file, &chunk)
+                .await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        }
+
+        file.flush()
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+        let rel = file_path
+            .strip_prefix(&base_path)
+            .ok()
+            .and_then(|p| p.to_str())
+            .unwrap_or(&filename)
+            .to_string();
+        log::info!("📤 文件上传成功: {} ({} bytes)", rel, written);
+        uploaded_files.push(rel);
+    }
+
+    Ok(Json(serde_json::json!({
+        "success": true,
+        "uploaded_files": uploaded_files,
+    })))
+}
+
+// ============================================================
+// 断点续传上传（PUT）
+// ============================================================
+
+/// PUT 断点续传上传：支持 Content-Range 头
+async fn upload_file_put(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    AxumPath((share_id, file_path)): AxumPath<(String, String)>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Result<StatusCode, StatusCode> {
+    authenticate_lobby(&state, &headers)?;
+    let share = state
+        .shared_folders
+        .read()
+        .get(&share_id)
+        .cloned()
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    if is_expired(share.expire_time, now) {
+        return Err(StatusCode::GONE);
+    }
+    check_write_access(&state, &share_id, &share, peer, &headers).await?;
+
+    let base_path = PathBuf::from(&share.path);
+    let full_path = safe_join(&base_path, &file_path).ok_or(StatusCode::FORBIDDEN)?;
+
+    // 确保路径仍在共享目录内且不是链接
+    if full_path.exists() {
+        let meta = tokio::fs::symlink_metadata(&full_path)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        if is_link_or_reparse_point(&meta) {
+            return Err(StatusCode::FORBIDDEN);
+        }
+        if meta.is_dir() {
+            return Err(StatusCode::BAD_REQUEST);
+        }
+    }
+
+    // 解析 Content-Range（如果有）
+    let content_range = headers
+        .get("content-range")
+        .and_then(|v| v.to_str().ok())
+        .and_then(parse_content_range);
+
+    if let Some((start, _end, _total)) = content_range {
+        // 断点续传：以读写方式打开，定位到 start
+        use tokio::io::{AsyncSeekExt, AsyncWriteExt};
+
+        // 确保父目录存在
+        if let Some(parent) = full_path.parent() {
+            tokio::fs::create_dir_all(parent)
+                .await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        }
+
+        let mut file = tokio::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&full_path)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+        file.seek(std::io::SeekFrom::Start(start))
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+        if body.len() as u64 + start > MAX_UPLOAD_BYTES as u64 {
+            return Err(StatusCode::PAYLOAD_TOO_LARGE);
+        }
+
+        file.write_all(&body)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        file.flush()
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+        log::info!(
+            "📤 断点续传写入: {} (offset={}, {} bytes)",
+            file_path,
+            start,
+            body.len()
+        );
+    } else {
+        // 完整写入
+        if body.len() > MAX_UPLOAD_BYTES {
+            return Err(StatusCode::PAYLOAD_TOO_LARGE);
+        }
+
+        // 确保父目录存在
+        if let Some(parent) = full_path.parent() {
+            tokio::fs::create_dir_all(parent)
+                .await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        }
+
+        tokio::fs::write(&full_path, &body)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+        log::info!("📤 文件PUT上传: {} ({} bytes)", file_path, body.len());
+    }
+
+    Ok(StatusCode::CREATED)
+}
+
+/// 解析 Content-Range 头: `bytes start-end/total`
+fn parse_content_range(s: &str) -> Option<(u64, u64, u64)> {
+    let s = s.strip_prefix("bytes ")?;
+    let (range, total) = s.split_once('/')?;
+    let total: u64 = total.parse().ok()?;
+    let (start, end) = range.split_once('-')?;
+    let start: u64 = start.parse().ok()?;
+    let end: u64 = end.parse().ok()?;
+    Some((start, end, total))
+}
+
+// ============================================================
+// 文件操作（mkdir / rename / delete）
+// ============================================================
+
+/// 创建目录
+async fn create_directory(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    AxumPath(share_id): AxumPath<String>,
+    headers: HeaderMap,
+    Json(req): Json<CreateDirectoryRequest>,
+) -> Result<StatusCode, StatusCode> {
+    authenticate_lobby(&state, &headers)?;
+    let share = state
+        .shared_folders
+        .read()
+        .get(&share_id)
+        .cloned()
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    if is_expired(share.expire_time, now) {
+        return Err(StatusCode::GONE);
+    }
+    check_write_access(&state, &share_id, &share, peer, &headers).await?;
+
+    let base_path = PathBuf::from(&share.path);
+    let full_path = safe_join(&base_path, &req.path).ok_or(StatusCode::FORBIDDEN)?;
+
+    // 检查是否已存在
+    if full_path.exists() {
+        return Err(StatusCode::CONFLICT);
+    }
+
+    tokio::fs::create_dir(&full_path)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    log::info!("📁 创建目录: {}/{}", share.name, req.path);
+    Ok(StatusCode::CREATED)
+}
+
+/// 重命名文件或目录
+async fn rename_item(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    AxumPath(share_id): AxumPath<String>,
+    headers: HeaderMap,
+    Json(req): Json<RenameRequest>,
+) -> Result<StatusCode, StatusCode> {
+    authenticate_lobby(&state, &headers)?;
+    let share = state
+        .shared_folders
+        .read()
+        .get(&share_id)
+        .cloned()
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    if is_expired(share.expire_time, now) {
+        return Err(StatusCode::GONE);
+    }
+    check_write_access(&state, &share_id, &share, peer, &headers).await?;
+
+    let base_path = PathBuf::from(&share.path);
+    let from = safe_existing_join(&base_path, &req.old_path).ok_or(StatusCode::FORBIDDEN)?;
+    let to = safe_join(&base_path, &req.new_path).ok_or(StatusCode::FORBIDDEN)?;
+
+    // 确保源不是链接
+    let meta = tokio::fs::symlink_metadata(&from)
+        .await
+        .map_err(|_| StatusCode::NOT_FOUND)?;
+    if is_link_or_reparse_point(&meta) {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    // 目标不能已存在
+    if to.exists() {
+        return Err(StatusCode::CONFLICT);
+    }
+
+    tokio::fs::rename(&from, &to)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    log::info!("✏️ 重命名: {} -> {}", req.old_path, req.new_path);
+    Ok(StatusCode::OK)
+}
+
+/// 删除文件或目录
+async fn delete_item(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    AxumPath(share_id): AxumPath<String>,
+    headers: HeaderMap,
+    Json(req): Json<DeleteRequest>,
+) -> Result<StatusCode, StatusCode> {
+    authenticate_lobby(&state, &headers)?;
+    let share = state
+        .shared_folders
+        .read()
+        .get(&share_id)
+        .cloned()
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    if is_expired(share.expire_time, now) {
+        return Err(StatusCode::GONE);
+    }
+    check_write_access(&state, &share_id, &share, peer, &headers).await?;
+
+    let base_path = PathBuf::from(&share.path);
+    let full_path = safe_existing_join(&base_path, &req.path).ok_or(StatusCode::FORBIDDEN)?;
+
+    let meta = tokio::fs::symlink_metadata(&full_path)
+        .await
+        .map_err(|_| StatusCode::NOT_FOUND)?;
+    if is_link_or_reparse_point(&meta) {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    if meta.is_dir() {
+        tokio::fs::remove_dir_all(&full_path)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    } else {
+        tokio::fs::remove_file(&full_path)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    }
+
+    log::info!("🗑️ 删除: {}", req.path);
+    Ok(StatusCode::OK)
+}
+
+// ============================================================
+// 文本分享
+// ============================================================
+
+/// 创建文本分享
+async fn create_text_share(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    AxumPath(share_id): AxumPath<String>,
+    headers: HeaderMap,
+    Json(req): Json<CreateTextShareRequest>,
+) -> Result<Json<TextShare>, StatusCode> {
+    authenticate_lobby(&state, &headers)?;
+    let share = state
+        .shared_folders
+        .read()
+        .get(&share_id)
+        .cloned()
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    if is_expired(share.expire_time, now) {
+        return Err(StatusCode::GONE);
+    }
+
+    // 文本分享只需读权限
+    if !is_share_access_allowed(
+        &state,
+        &share_id,
+        &share,
+        peer,
+        share_password_header(&headers),
+    )
+    .await
+    {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+
+    if req.text.len() > MAX_TEXT_SHARE_BYTES {
+        return Err(StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    // 清理过期文本分享
+    let now_secs = now;
+    let expired: Vec<String> = {
+        let shares = state.text_shares.read();
+        shares
+            .iter()
+            .filter(|(_, s)| now_secs.saturating_sub(s.created_at) > TEXT_SHARE_TTL.as_secs())
+            .map(|(id, _)| id.clone())
+            .collect()
+    };
+    for id in expired {
+        state.text_shares.write().remove(&id);
+    }
+
+    let id = Uuid::new_v4().to_string();
+    let text_share = TextShare {
+        id: id.clone(),
+        text: req.text,
+        created_at: now,
+        owner_id: share.owner_id.clone(),
+    };
+    state.text_shares.write().insert(id, text_share.clone());
+
+    log::info!("📝 创建文本分享: {}", text_share.id);
+    Ok(Json(text_share))
+}
+
+/// 获取文本分享
+async fn get_text_share(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    AxumPath((share_id, text_id)): AxumPath<(String, String)>,
+    headers: HeaderMap,
+) -> Result<Json<TextShare>, StatusCode> {
+    authenticate_lobby(&state, &headers)?;
+    let share = state
+        .shared_folders
+        .read()
+        .get(&share_id)
+        .cloned()
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    if is_expired(share.expire_time, now) {
+        return Err(StatusCode::GONE);
+    }
+
+    if !is_share_access_allowed(
+        &state,
+        &share_id,
+        &share,
+        peer,
+        share_password_header(&headers),
+    )
+    .await
+    {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+
+    let text_share = state
+        .text_shares
+        .read()
+        .get(&text_id)
+        .cloned()
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    // 检查是否过期
+    if now.saturating_sub(text_share.created_at) > TEXT_SHARE_TTL.as_secs() {
+        state.text_shares.write().remove(&text_id);
+        return Err(StatusCode::GONE);
+    }
+
+    Ok(Json(text_share))
+}
+
+// ============================================================
+// WebDAV（PROPFIND / MKCOL / MOVE）
+// ============================================================
+
+/// WebDAV 请求分发器
+async fn webdav_handler(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    AxumPath((share_id, dav_path)): AxumPath<(String, String)>,
+    headers: HeaderMap,
+    method: axum::http::Method,
+    _body: axum::body::Bytes,
+) -> Result<Response, StatusCode> {
+    authenticate_lobby(&state, &headers)?;
+    let share = state
+        .shared_folders
+        .read()
+        .get(&share_id)
+        .cloned()
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    if is_expired(share.expire_time, now) {
+        return Err(StatusCode::GONE);
+    }
+
+    if !is_share_access_allowed(
+        &state,
+        &share_id,
+        &share,
+        peer,
+        share_password_header(&headers),
+    )
+    .await
+    {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+
+    let base_path = PathBuf::from(&share.path);
+
+    match method.as_str() {
+        "PROPFIND" => webdav_propfind(&base_path, &dav_path, &headers).await,
+        "MKCOL" => {
+            check_write_access(&state, &share_id, &share, peer, &headers).await?;
+            webdav_mkcol(&base_path, &dav_path).await
+        }
+        "MOVE" => {
+            check_write_access(&state, &share_id, &share, peer, &headers).await?;
+            webdav_move(&base_path, &dav_path, &headers).await
+        }
+        _ => Err(StatusCode::METHOD_NOT_ALLOWED),
+    }
+}
+
+/// WebDAV PROPFIND：返回资源属性（XML multistatus）
+async fn webdav_propfind(
+    base_path: &Path,
+    dav_path: &str,
+    _headers: &HeaderMap,
+) -> Result<Response, StatusCode> {
+    let full_path = if dav_path.is_empty() {
+        base_path.to_path_buf()
+    } else {
+        safe_existing_join(base_path, dav_path).ok_or(StatusCode::NOT_FOUND)?
+    };
+
+    let meta = tokio::fs::symlink_metadata(&full_path)
+        .await
+        .map_err(|_| StatusCode::NOT_FOUND)?;
+    if is_link_or_reparse_point(&meta) {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    let is_dir = meta.is_dir();
+    let size = meta.len();
+    let modified = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let last_modified = format_http_date(modified);
+
+    let mut responses = String::new();
+
+    // 自身
+    responses.push_str(&format!(
+        r#"<response><href>{}</href><propstat><prop><displayname>{}</displayname><getcontentlength>{}</getcontentlength><getlastmodified>{}</getlastmodified><resourcetype>{}</resourcetype></prop><status>HTTP/1.1 200 OK</status></propstat></response>"#,
+        percent_encoding::utf8_percent_encode(dav_path, percent_encoding::NON_ALPHANUMERIC),
+        full_path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
+        size,
+        last_modified,
+        if is_dir { "<collection/>" } else { "" }
+    ));
+
+    // 如果是目录且 Depth 不是 0，列出子项
+    if is_dir {
+        let mut entries = tokio::fs::read_dir(&full_path)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+        while let Some(entry) = entries
+            .next_entry()
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        {
+            let entry_meta = tokio::fs::symlink_metadata(entry.path())
+                .await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            if is_link_or_reparse_point(&entry_meta) {
+                continue;
+            }
+
+            let name = entry.file_name().to_string_lossy().to_string();
+            let child_path = if dav_path.is_empty() {
+                name.clone()
+            } else {
+                format!("{}/{}", dav_path, name)
+            };
+            let child_size = entry_meta.len();
+            let child_modified = entry_meta
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let child_last_modified = format_http_date(child_modified);
+            let child_is_dir = entry_meta.is_dir();
+
+            responses.push_str(&format!(
+                r#"<response><href>{}</href><propstat><prop><displayname>{}</displayname><getcontentlength>{}</getcontentlength><getlastmodified>{}</getlastmodified><resourcetype>{}</resourcetype></prop><status>HTTP/1.1 200 OK</status></propstat></response>"#,
+                percent_encoding::utf8_percent_encode(&child_path, percent_encoding::NON_ALPHANUMERIC),
+                name,
+                child_size,
+                child_last_modified,
+                if child_is_dir { "<collection/>" } else { "" }
+            ));
+        }
+    }
+
+    let xml = format!(
+        r#"<?xml version="1.0" encoding="utf-8"?><multistatus xmlns="DAV:">{}</multistatus>"#,
+        responses
+    );
+
+    Response::builder()
+        .status(StatusCode::from_u16(207).unwrap_or(StatusCode::OK))
+        .header(header::CONTENT_TYPE, "application/xml; charset=utf-8")
+        .header("DAV", "1, 2")
+        .body(Body::from(xml))
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+/// WebDAV MKCOL：创建目录
+async fn webdav_mkcol(base_path: &Path, dav_path: &str) -> Result<Response, StatusCode> {
+    let full_path = safe_join(base_path, dav_path).ok_or(StatusCode::FORBIDDEN)?;
+
+    if full_path.exists() {
+        return Response::builder()
+            .status(StatusCode::METHOD_NOT_ALLOWED)
+            .body(Body::empty())
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    tokio::fs::create_dir(&full_path)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Response::builder()
+        .status(StatusCode::CREATED)
+        .body(Body::empty())
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+/// WebDAV MOVE：移动/重命名
+async fn webdav_move(
+    base_path: &Path,
+    dav_path: &str,
+    headers: &HeaderMap,
+) -> Result<Response, StatusCode> {
+    let from = safe_existing_join(base_path, dav_path).ok_or(StatusCode::FORBIDDEN)?;
+
+    // Destination 头中提取目标路径
+    let destination = headers
+        .get("destination")
+        .and_then(|v| v.to_str().ok())
+        .ok_or(StatusCode::BAD_REQUEST)?;
+
+    // 从 URL 中提取路径部分（去掉 http://host:port/api/shares/:id/dav/ 前缀）
+    let dest_rel = destination
+        .split_once("/dav/")
+        .map(|x| x.1)
+        .unwrap_or("")
+        .to_string();
+
+    let to = safe_join(base_path, &dest_rel).ok_or(StatusCode::FORBIDDEN)?;
+
+    let meta = tokio::fs::symlink_metadata(&from)
+        .await
+        .map_err(|_| StatusCode::NOT_FOUND)?;
+    if is_link_or_reparse_point(&meta) {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    if to.exists() {
+        return Response::builder()
+            .status(StatusCode::PRECONDITION_FAILED)
+            .body(Body::empty())
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    tokio::fs::rename(&from, &to)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Response::builder()
+        .status(StatusCode::CREATED)
+        .body(Body::empty())
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }

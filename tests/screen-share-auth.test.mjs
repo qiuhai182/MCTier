@@ -3,8 +3,8 @@ import fs from 'node:fs';
 import test from 'node:test';
 
 const desktop = fs.readFileSync(new URL('../src/services/screenShare/ScreenShareService.ts', import.meta.url), 'utf8');
-const androidController = fs.readFileSync(new URL('../MCTier-Android/app/src/main/java/top/pmh13/mctier/network/ScreenShareController.kt', import.meta.url), 'utf8');
-const androidRepository = fs.readFileSync(new URL('../MCTier-Android/app/src/main/java/top/pmh13/mctier/MctierRepository.kt', import.meta.url), 'utf8');
+const androidController = fs.readFileSync(new URL('../android/app/src/main/java/top/pmh13/mctier/network/ScreenShareController.kt', import.meta.url), 'utf8');
+const androidRepository = fs.readFileSync(new URL('../android/app/src/main/java/top/pmh13/mctier/MctierRepository.kt', import.meta.url), 'utf8');
 
 test('relay viewers cannot use a legacy or unassigned offer', () => {
   const desktopOffer = desktop.slice(desktop.indexOf('async handleOffer'), desktop.indexOf('async handleAnswer'));

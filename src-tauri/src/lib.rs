@@ -89,19 +89,21 @@ use modules::tauri_commands::{
     cancel_lobby_connecting, cancel_remote_download, check_auto_start, check_file_server_status,
     check_firewall_rules, check_udp_port, check_virtual_adapter, cleanup_expired_shares,
     clear_avatar_cache, clear_p2p_chat_messages, close_danmaku_window, close_game_hud_window,
-    configure_p2p_chat, create_lobby, danmaku_cursor_pos, delete_file, detect_security_software,
+    configure_p2p_chat, create_lobby, create_remote_directory, create_remote_text_share,
+    danmaku_cursor_pos, delete_file, delete_remote_item, detect_security_software,
     diagnose_file_share_connection, download_remote_batch, download_remote_file, exit_app,
     export_config, export_logs, extract_zip, force_stop_easytier, gamehud_cursor_pos,
     get_app_state, get_audio_devices, get_config, get_current_lobby, get_download_url,
     get_exit_node_advanced_config, get_file_share_download_dir, get_file_share_download_path,
     get_folder_info, get_folder_name, get_global_mute_status, get_local_shares, get_log_file_path,
     get_mic_status, get_network_status, get_p2p_chat_messages, get_peer_connection_types,
-    get_players, get_remote_files, get_remote_shares, get_settings, get_virtual_ip, import_config,
-    is_admin, is_player_muted, join_lobby, leave_lobby, list_directory_files, mute_all,
-    mute_player, open_danmaku_window, open_file_location, open_folder, open_game_hud_window,
-    open_log_file, open_log_folder, open_microphone_privacy_settings, open_screen_viewer_window,
-    ping_virtual_ip, prepare_p2p_chat_identity, prepare_signaling_identity, read_file,
-    read_file_bytes, read_log_file, remove_player_domain, remove_shared_folder,
+    get_players, get_remote_files, get_remote_shares, get_remote_text_share, get_settings,
+    get_upload_url, get_virtual_ip, import_config, is_admin, is_player_muted, join_lobby,
+    leave_lobby, list_directory_files, mute_all, mute_player, open_danmaku_window,
+    open_file_location, open_folder, open_game_hud_window, open_log_file, open_log_folder,
+    open_microphone_privacy_settings, open_screen_viewer_window, ping_virtual_ip,
+    prepare_p2p_chat_identity, prepare_signaling_identity, read_file, read_file_bytes,
+    read_log_file, remove_player_domain, remove_shared_folder, rename_remote_item,
     reset_config_to_default, reset_microphone_permission, restart_app_with_gpu_settings,
     restart_as_admin, save_chat_image, save_danmaku_image, save_exit_node_advanced_config,
     save_file, save_opacity, save_settings, save_voice_volume, save_window_position, select_file,
@@ -452,11 +454,13 @@ fn show_tray_background_notification(app: &tauri::AppHandle, generation: u64) {
             // Clear the previous balloon first. Windows otherwise coalesces
             // identical tray notifications and reports success without showing
             // the next one, which is especially visible after entering a lobby.
-            let mut clear_data = NOTIFYICONDATAW::default();
-            clear_data.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
-            clear_data.hWnd = tray_window;
-            clear_data.uID = tray_id;
-            clear_data.uFlags = NIF_INFO;
+            let clear_data = NOTIFYICONDATAW {
+                cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
+                hWnd: tray_window,
+                uID: tray_id,
+                uFlags: NIF_INFO,
+                ..Default::default()
+            };
             let cleared = unsafe { Shell_NotifyIconW(NIM_MODIFY, &clear_data).as_bool() };
             let clear_error = if cleared {
                 0
@@ -467,11 +471,13 @@ fn show_tray_background_notification(app: &tauri::AppHandle, generation: u64) {
                 std::thread::sleep(std::time::Duration::from_millis(80));
             }
 
-            let mut data = NOTIFYICONDATAW::default();
-            data.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
-            data.hWnd = tray_window;
-            data.uID = tray_id;
-            data.uFlags = NIF_INFO;
+            let mut data = NOTIFYICONDATAW {
+                cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
+                hWnd: tray_window,
+                uID: tray_id,
+                uFlags: NIF_INFO,
+                ..Default::default()
+            };
             let notification_icon = load_notification_icon();
             if let Some(icon) = notification_icon {
                 data.dwInfoFlags = NIIF_USER | NIIF_LARGE_ICON;
@@ -520,12 +526,14 @@ fn show_tray_background_notification(app: &tauri::AppHandle, generation: u64) {
             let fallback_icon = load_notification_icon();
             let fallback_id = 0x4D43_0001;
             if let Some(fallback_icon) = fallback_icon {
-                let mut add_data = NOTIFYICONDATAW::default();
-                add_data.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
-                add_data.hWnd = tray_window;
-                add_data.uID = fallback_id;
-                add_data.uFlags = NIF_ICON;
-                add_data.hIcon = fallback_icon;
+                let add_data = NOTIFYICONDATAW {
+                    cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
+                    hWnd: tray_window,
+                    uID: fallback_id,
+                    uFlags: NIF_ICON,
+                    hIcon: fallback_icon,
+                    ..Default::default()
+                };
                 let _ = unsafe { Shell_NotifyIconW(NIM_DELETE, &add_data) };
                 let added = unsafe { Shell_NotifyIconW(NIM_ADD, &add_data).as_bool() };
                 let add_error = if added {
@@ -535,12 +543,14 @@ fn show_tray_background_notification(app: &tauri::AppHandle, generation: u64) {
                 };
                 if added {
                     std::thread::sleep(std::time::Duration::from_millis(80));
-                    let mut fallback_data = NOTIFYICONDATAW::default();
-                    fallback_data.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
-                    fallback_data.hWnd = tray_window;
-                    fallback_data.uID = fallback_id;
-                    fallback_data.uFlags = NIF_INFO;
-                    fallback_data.dwInfoFlags = NIIF_INFO;
+                    let mut fallback_data = NOTIFYICONDATAW {
+                        cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
+                        hWnd: tray_window,
+                        uID: fallback_id,
+                        uFlags: NIF_INFO,
+                        dwInfoFlags: NIIF_INFO,
+                        ..Default::default()
+                    };
                     fallback_data.Anonymous.uTimeout = 7000;
                     write_wide(&mut fallback_data.szInfoTitle, &title);
                     write_wide(&mut fallback_data.szInfo, &notification_body);
@@ -565,20 +575,19 @@ fn show_tray_background_notification(app: &tauri::AppHandle, generation: u64) {
                     std::thread::spawn(move || {
                         std::thread::sleep(std::time::Duration::from_secs(10));
                         let _ = cleanup_app.run_on_main_thread(move || {
-                            let mut delete_data = NOTIFYICONDATAW::default();
-                            delete_data.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
-                            delete_data.hWnd = HWND(tray_window_value as *mut _);
-                            delete_data.uID = fallback_id;
-                            delete_data.uFlags = NIF_ICON;
+                            let delete_data = NOTIFYICONDATAW {
+                                cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
+                                hWnd: HWND(tray_window_value as *mut _),
+                                uID: fallback_id,
+                                uFlags: NIF_ICON,
+                                ..Default::default()
+                            };
                             unsafe {
                                 let _ = Shell_NotifyIconW(NIM_DELETE, &delete_data);
                                 let _ = DestroyIcon(HICON(fallback_icon_value as *mut _));
                             }
                         });
                     });
-                    if fallback_shown {
-                        return;
-                    }
                 } else {
                     unsafe {
                         let _ = DestroyIcon(fallback_icon);
@@ -1168,6 +1177,8 @@ pub fn run() {
             add_shared_folder, remove_shared_folder, get_local_shares,
             cleanup_expired_shares, get_remote_shares, get_remote_files,
             verify_share_password, get_download_url, diagnose_file_share_connection,
+            get_upload_url, create_remote_directory, rename_remote_item, delete_remote_item,
+            create_remote_text_share, get_remote_text_share,
             download_remote_file, cancel_remote_download, export_logs, test_node_latency,
             download_remote_batch, detect_security_software,
             prepare_p2p_chat_identity, prepare_signaling_identity, sign_signaling_registration,

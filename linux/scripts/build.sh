@@ -3,13 +3,13 @@
 #
 # 源码与 Windows 端**完全共用** MCTier桌面应用/ 下的那一份，平台差异全部由
 # Rust 的 #[cfg(target_os = "linux")] 分支处理。这么做的原因是：如果把源码复制
-# 一份到 MCTier-Linux/，两边必然随时间发散，"Linux 与 Windows 同步更新"就成了
-# 空话。因此 MCTier-Linux/ 只放 Linux 独有的构建、打包与运行时资产。
+# 一份到 linux/，两边必然随时间发散，"Linux 与 Windows 同步更新"就成了
+# 空话。因此 linux/ 只放 Linux 独有的构建、打包与运行时资产。
 #
 # 用法：
-#   ./MCTier-Linux/scripts/build.sh              # 默认产出 deb + AppImage
-#   ./MCTier-Linux/scripts/build.sh --bundles deb
-#   ./MCTier-Linux/scripts/build.sh --debug      # 调试构建，不打包
+#   ./linux/scripts/build.sh              # 默认产出 deb + AppImage
+#   ./linux/scripts/build.sh --bundles deb
+#   ./linux/scripts/build.sh --debug      # 调试构建，不打包
 
 set -Eeuo pipefail
 
@@ -38,14 +38,14 @@ done
 cd -- "$DESKTOP_ROOT"
 
 # ---- 前置检查 -------------------------------------------------------------
-command -v cargo >/dev/null 2>&1 || fail "缺少 Rust 工具链，请先执行 MCTier-Linux/scripts/install-deps.sh"
-command -v npm   >/dev/null 2>&1 || fail "缺少 Node.js/npm，请先执行 MCTier-Linux/scripts/install-deps.sh"
+command -v cargo >/dev/null 2>&1 || fail "缺少 Rust 工具链，请先执行 linux/scripts/install-deps.sh"
+command -v npm   >/dev/null 2>&1 || fail "缺少 Node.js/npm，请先执行 linux/scripts/install-deps.sh"
 
 # Tauri 2 需要 webkit2gtk-4.1 的 pkg-config 文件；缺了会在 cargo build 中途才报错，
 # 那时已经白等好几分钟，所以提前拦。
 if command -v pkg-config >/dev/null 2>&1; then
   pkg-config --exists webkit2gtk-4.1 || pkg-config --exists webkit2gtk-4.0 \
-    || fail "找不到 webkit2gtk 开发包，请先执行 MCTier-Linux/scripts/install-deps.sh"
+    || fail "找不到 webkit2gtk 开发包，请先执行 linux/scripts/install-deps.sh"
 fi
 
 # include_bytes! 依赖的 EasyTier 二进制不入库，缺失时直接调用获取脚本，
