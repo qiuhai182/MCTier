@@ -4,5 +4,5 @@ npx lint-staged
 # 运行 Rust 格式化检查
 cd src-tauri && cargo fmt --check && cd ..
 
-# 运行 Rust clippy 检查
-cd src-tauri && cargo clippy -- -D warnings && cd ..
+# 运行 Rust clippy 检查（--quiet 隐藏 Compiling/Finished 编译进度，仅显示警告）
+cd src-tauri && cargo clippy --quiet -- -D warnings && cd ..
