@@ -94,7 +94,6 @@ download/
 
 # 一次性脚本 / 构建日志 / 过期的更新元数据（见 issue #17）
 /0
-/upLoad.sh
 /buildout.txt
 /latest.json
 
