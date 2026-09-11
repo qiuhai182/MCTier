@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     构建不依赖 Npcap 的 EasyTier（easytier-core.exe / easytier-cli.exe）。
 

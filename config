@@ -5,15 +5,10 @@
 	logallrefupdates = true
 	symlinks = false
 	ignorecase = true
-[remote "origin"]
-	url = https://github.com/qiuhai182/MCTier.git
-	fetch = +refs/heads/*:refs/remotes/origin/*
-	pushurl = https://github.com/qiuhai182/MCTier.git
-	pushurl = https://gitee.com/qiuhai182/MCTier.git
 [branch "master"]
-	remote = origin
+	remote = github
+	vscode-merge-base = github/master
 	merge = refs/heads/master
-	vscode-merge-base = origin/master
 [remote "github"]
 	url = https://github.com/qiuhai182/MCTier.git
 	fetch = +refs/heads/*:refs/remotes/github/*
